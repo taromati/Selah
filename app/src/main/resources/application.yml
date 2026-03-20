@@ -1,0 +1,25 @@
+server:
+  port: 6060
+  tomcat:
+    max-parameter-count: 10000
+    max-part-count: 10000
+
+spring:
+  config:
+    import: optional:file:./config.yml
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 500MB
+  task:
+    scheduling:
+      pool:
+        size: 3
+  sql:
+    init:
+      mode: never
+
+logging:
+  level:
+    me.taromati.almah: INFO
+    org.springframework: WARN

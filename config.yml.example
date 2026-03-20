@@ -1,0 +1,39 @@
+# ── Discord ──
+discord:
+  token: "YOUR_DISCORD_BOT_TOKEN"
+  server-name: "YOUR_SERVER_NAME"
+
+# ── LLM Providers ──
+llm:
+  providers:
+    vllm:
+      enabled: true
+      base-url: "http://localhost:8000/v1"
+      model: "your-model-name"
+    openai:
+      enabled: false
+      api-key: "YOUR_OPENAI_API_KEY"
+      model: "gpt-4o"
+
+  embedding:
+    base-url: "http://localhost:8001/v1"
+    model: "your-embedding-model"
+
+# ── Plugins ──
+plugins:
+  notification-channel: "system"
+
+  agent:
+    enabled: true
+    channel-name: "agent"
+    data-dir: "./agent-data/"
+    llm-provider: "vllm"
+    system-prompt: "You are a helpful AI agent."
+    web-search:
+      provider: "searxng"
+      searxng-url: "http://localhost:8888"
+
+# ── Web Auth ──
+web:
+  auth:
+    enabled: true
