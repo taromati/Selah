@@ -220,11 +220,17 @@ function Setup-SearxngSource {
     $tempExtract = Join-Path $env:USERPROFILE ".selah-tmp"
     if (Test-Path $tempExtract) { Remove-Item -Recurse -Force $tempExtract -ErrorAction SilentlyContinue }
 
-    if (-not (Test-Path (Join-Path $SearxngDir "searx"))) {
+    $hasSource = (Test-Path (Join-Path $SearxngDir "searx")) -and (Test-Path (Join-Path $SearxngDir "setup.py"))
+    if (-not $hasSource) {
+        # Incomplete source from previous attempt -- clean up
+        if (Test-Path $SearxngDir) {
+            Write-Warn "Incomplete SearXNG source detected. Reinstalling."
+            Remove-Item -Recurse -Force $SearxngDir -ErrorAction SilentlyContinue
+        }
         Write-Info "Downloading SearXNG..."
         $parentDir = Split-Path $SearxngDir -Parent
         if (-not (Test-Path $parentDir)) { New-Item -ItemType Directory -Force -Path $parentDir | Out-Null }
-        if (-not (Test-Path $SearxngDir)) { New-Item -ItemType Directory -Force -Path $SearxngDir | Out-Null }
+        New-Item -ItemType Directory -Force -Path $SearxngDir | Out-Null
 
         $tempTar = Join-Path $env:TEMP "selah-searxng.tar.gz"
 
@@ -235,6 +241,7 @@ function Setup-SearxngSource {
         New-Item -ItemType Directory -Force -Path $tempExtract | Out-Null
         # tar may warn about Windows-incompatible paths (e.g. utils/templates/etc/apache2)
         # -- these are unused files, so temporarily relax ErrorAction and verify essential files
+        Write-Info "Extracting archive..."
         $oldPref = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try { & tar xzf $tempTar -C $tempExtract --strip-components=1 2>&1 | Out-Null } catch {}
@@ -243,12 +250,13 @@ function Setup-SearxngSource {
             throw "tar extraction failed: searx/ directory not found"
         }
 
-        # Move to final location via robocopy
-        & robocopy $tempExtract $SearxngDir /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+        Write-Info "Moving files to destination..."
+        # Move instead of copy -- instant on same drive (no file-by-file copy)
+        if (Test-Path $SearxngDir) { Remove-Item -Recurse -Force $SearxngDir }
+        Move-Item -Path $tempExtract -Destination $SearxngDir
 
         Remove-Item -Force $tempTar -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force $tempExtract -ErrorAction SilentlyContinue
-        Write-Success "SearXNG source downloaded"
+        Write-Success "SearXNG source ready"
     } else {
         Write-Success "SearXNG source already exists"
     }
@@ -273,7 +281,7 @@ function Install-SearxngVenv {
         return
     }
 
-    Write-Info "Creating Python venv and installing SearXNG..."
+    Write-Info "Creating Python venv..."
 
     # PythonCmd is already resolved to actual python.exe path (handled in Find-Python)
     & uv venv $venvDir --python $script:PythonCmd
@@ -285,12 +293,14 @@ function Install-SearxngVenv {
     $requirementsFile = Join-Path $SearxngDir "requirements.txt"
 
     # SearXNG's setup.py imports runtime dependencies during build -- install everything first
+    Write-Info "Installing dependencies (this may take a few minutes)..."
     & uv pip install --python $venvPython setuptools
     if ($LASTEXITCODE -ne 0) { throw "setuptools installation failed (exitcode: $LASTEXITCODE)" }
 
     & uv pip install --python $venvPython -r $requirementsFile
     if ($LASTEXITCODE -ne 0) { throw "requirements.txt installation failed (exitcode: $LASTEXITCODE)" }
 
+    Write-Info "Building SearXNG package..."
     & uv pip install --python $venvPython --no-deps --no-build-isolation $SearxngDir
     if ($LASTEXITCODE -ne 0) {
         throw "uv pip install failed (exitcode: $LASTEXITCODE)"
@@ -528,9 +538,64 @@ try {
 
 if (-not $InstallSuccess) { exit 1 }
 
+# -- Step 7: Register NSSM service (if NSSM available) --
+
+$nssmExe = Join-Path $SelahHome "bin\nssm.exe"
+$searxngRun = Join-Path $SearxngDir ".venv\Scripts\searxng-run.exe"
+
+if ((Test-Path $nssmExe) -and (Test-Path $searxngRun)) {
+    Write-Info "Registering SearXNG as Windows service..."
+
+    # Check admin
+    $isAdmin = $false
+    try {
+        $null = & net session 2>&1
+        if ($LASTEXITCODE -eq 0) { $isAdmin = $true }
+    } catch {}
+
+    if ($isAdmin) {
+        $settingsPath = Join-Path $SearxngDir "settings.yml"
+        $logsDir = Join-Path $SelahHome "logs"
+        if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Force -Path $logsDir | Out-Null }
+
+        # Remove existing service if registered
+        $null = sc.exe query selah-searxng 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            & $nssmExe stop selah-searxng
+            & $nssmExe remove selah-searxng confirm
+        }
+
+        & $nssmExe install selah-searxng $searxngRun
+        & $nssmExe set selah-searxng AppDirectory $SearxngDir
+        & $nssmExe set selah-searxng AppEnvironmentExtra "SEARXNG_SETTINGS_PATH=$settingsPath"
+        & $nssmExe set selah-searxng DisplayName "Selah SearXNG"
+        & $nssmExe set selah-searxng Description "SearXNG meta-search engine for Selah"
+        & $nssmExe set selah-searxng AppStdout (Join-Path $logsDir "searxng-stdout.log")
+        & $nssmExe set selah-searxng AppStderr (Join-Path $logsDir "searxng-stderr.log")
+        & $nssmExe set selah-searxng AppStdoutCreationDisposition 4
+        & $nssmExe set selah-searxng AppStderrCreationDisposition 4
+        & $nssmExe set selah-searxng AppExit Default Restart
+        & $nssmExe set selah-searxng AppRestartDelay 5000
+        & $nssmExe set selah-searxng Start SERVICE_AUTO_START
+
+        & $nssmExe start selah-searxng
+
+        Write-Success "SearXNG registered as Windows service (selah-searxng)"
+    } else {
+        Write-Warn "Admin privileges required for service registration."
+        Write-Info "Run 'selah start' as administrator to register services."
+    }
+} else {
+    if (-not (Test-Path $nssmExe)) {
+        Write-Info "NSSM not found. SearXNG will start with Selah (legacy mode)."
+    }
+}
+
 Write-Host ""
 Write-Success "SearXNG installation complete!"
 Write-Info "Location: $SearxngDir"
-Write-Info "Start: $SearxngDir\start.bat (or start.ps1)"
 Write-Info "Port: $SearxngPort (localhost only)"
+Write-Host ""
+Write-Host "  To reinstall SearXNG later:" -ForegroundColor Yellow
+Write-Host "  powershell -c `"irm https://raw.githubusercontent.com/taromati/Selah/main/install-searxng.ps1 | iex`"" -ForegroundColor Cyan
 Write-Host ""

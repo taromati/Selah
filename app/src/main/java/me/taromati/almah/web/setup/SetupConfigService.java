@@ -83,9 +83,7 @@ public class SetupConfigService {
                     yield proc.waitFor() == 0;
                 }
                 case "windows" -> {
-                    var proc = new ProcessBuilder("schtasks", "/query", "/tn", "Selah")
-                            .redirectErrorStream(true).start();
-                    yield proc.waitFor() == 0;
+                    yield me.taromati.almah.setup.service.WindowsService.isServiceRegistered();
                 }
                 default -> false;
             };

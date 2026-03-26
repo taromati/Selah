@@ -365,7 +365,7 @@ public class DoctorCheck {
                     if (code == 0) {
                         ui.success("LaunchAgent 서비스 등록됨");
                     } else {
-                        ui.info("LaunchAgent 서비스가 등록되어 있지 않습니다. (selah enable로 등록 가능)");
+                        ui.info("LaunchAgent 서비스가 등록되어 있지 않습니다. (selah start로 등록 가능)");
                     }
                 }
                 case "linux" -> {
@@ -375,17 +375,14 @@ public class DoctorCheck {
                     if (code == 0) {
                         ui.success("systemd 사용자 서비스 등록됨");
                     } else {
-                        ui.info("systemd 서비스가 등록되어 있지 않습니다. (selah enable로 등록 가능)");
+                        ui.info("systemd 서비스가 등록되어 있지 않습니다. (selah start로 등록 가능)");
                     }
                 }
                 case "windows" -> {
-                    var proc = new ProcessBuilder("schtasks", "/query", "/tn", "Selah")
-                            .redirectErrorStream(true).start();
-                    int code = proc.waitFor();
-                    if (code == 0) {
-                        ui.success("Windows 예약 작업 등록됨");
+                    if (me.taromati.almah.setup.service.WindowsService.isServiceRegistered()) {
+                        ui.success("NSSM 서비스 등록됨 (selah)");
                     } else {
-                        ui.info("Windows 예약 작업이 등록되어 있지 않습니다. (selah enable로 등록 가능)");
+                        ui.info("Windows 서비스가 등록되어 있지 않습니다. (selah start로 등록 가능)");
                     }
                 }
             }

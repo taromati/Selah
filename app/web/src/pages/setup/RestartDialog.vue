@@ -18,7 +18,7 @@
       <template #default>
         서비스가 등록되어 있지 않습니다. 수동으로 재시작해주세요.
         <br>
-        <code>selah</code> (또는 서비스 등록: <code>selah enable</code>)
+        <code>selah</code> (또는 서비스 등록: <code>selah start</code>)
       </template>
     </el-alert>
 

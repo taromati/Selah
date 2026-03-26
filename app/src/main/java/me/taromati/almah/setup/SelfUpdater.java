@@ -77,9 +77,14 @@ public class SelfUpdater {
                 Path home = resolveSelahHome();
                 String os = System.getProperty("os.name", "").toLowerCase();
                 if (os.contains("windows")) {
-                    Path wrapper = home.resolve("bin/selah.bat");
-                    new ProcessBuilder("cmd", "/c", "start", "/min", "Selah", wrapper.toString())
-                            .directory(home.toFile()).start();
+                    if (me.taromati.almah.setup.service.WindowsService.isServiceRegistered()) {
+                        Path nssm = home.resolve("bin/nssm.exe");
+                        new ProcessBuilder(nssm.toString(), "start", "selah").start();
+                    } else {
+                        Path wrapper = home.resolve("bin/selah.bat");
+                        new ProcessBuilder("cmd", "/c", "start", "/min", "Selah", wrapper.toString())
+                                .directory(home.toFile()).start();
+                    }
                 } else if (os.contains("mac")) {
                     String uid = new ProcessBuilder("id", "-u").start()
                             .inputReader().readLine().trim();
@@ -99,11 +104,19 @@ public class SelfUpdater {
         String os = System.getProperty("os.name", "").toLowerCase();
         try {
             if (os.contains("windows")) {
-                new ProcessBuilder("taskkill", "/f", "/im", "java.exe",
-                        "/fi", "WINDOWTITLE eq Selah*").start().waitFor();
+                if (me.taromati.almah.setup.service.WindowsService.isServiceRegistered()) {
+                    Path nssm = me.taromati.almah.setup.service.WindowsService
+                            .resolveSelahHome().resolve("bin/nssm.exe");
+                    new ProcessBuilder(nssm.toString(), "stop", "selah").start().waitFor();
+                } else {
+                    new ProcessBuilder("taskkill", "/f", "/im", "java.exe",
+                            "/fi", "WINDOWTITLE eq Selah*").start().waitFor();
+                }
             } else if (os.contains("mac")) {
+                String uid = new ProcessBuilder("id", "-u").start()
+                        .inputReader().readLine().trim();
                 new ProcessBuilder("launchctl", "kill", "SIGTERM",
-                        "gui/" + ProcessHandle.current().pid() + "/me.taromati.selah")
+                        "gui/" + uid + "/me.taromati.selah")
                         .start().waitFor();
             } else {
                 new ProcessBuilder("systemctl", "--user", "stop", "selah")

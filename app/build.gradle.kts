@@ -39,7 +39,12 @@ val copyFrontend = tasks.register<Copy>("copyFrontend") {
     dependsOn(cleanFrontend, npmBuild)
 }
 
-tasks.processResources { dependsOn(copyFrontend) }
+tasks.processResources {
+    dependsOn(copyFrontend)
+    filesMatching("application.yml") {
+        filter { it.replace("@project.version@", rootProject.version.toString()) }
+    }
+}
 
 // bootJar를 루트 build/libs에 selah-{version}.jar로 생성
 tasks.bootJar {

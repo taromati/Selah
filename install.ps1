@@ -205,6 +205,49 @@ function Install-Selah {
     Write-Success "Selah v$ResolvedVersion downloaded ($jarName)"
 }
 
+# -- NSSM installation --
+
+function Install-Nssm {
+    $nssmPath = Join-Path $SelahHome "bin\nssm.exe"
+
+    if (Test-Path $nssmPath) {
+        Write-Success "NSSM already installed"
+        return
+    }
+
+    Write-Info "Downloading NSSM (service manager)..."
+    $nssmUrl = "https://nssm.cc/release/nssm-2.24.zip"
+    $tempZip = Join-Path $env:TEMP "selah-nssm.zip"
+    $tempExtract = Join-Path $env:TEMP "selah-nssm-extract"
+
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $nssmUrl -OutFile $tempZip -UseBasicParsing
+
+    if (Test-Path $tempExtract) { Remove-Item -Recurse -Force $tempExtract }
+    Expand-Archive -Path $tempZip -DestinationPath $tempExtract
+
+    $nssmExe = Get-ChildItem -Path $tempExtract -Recurse -Filter "nssm.exe" |
+        Where-Object { $_.DirectoryName -match "win64" } |
+        Select-Object -First 1
+
+    if (-not $nssmExe) {
+        $nssmExe = Get-ChildItem -Path $tempExtract -Recurse -Filter "nssm.exe" |
+            Select-Object -First 1
+    }
+
+    if ($nssmExe) {
+        $binDir = Join-Path $SelahHome "bin"
+        New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+        Copy-Item -Path $nssmExe.FullName -Destination $nssmPath -Force
+        Write-Success "NSSM installed"
+    } else {
+        Write-Warn "NSSM download failed. 'selah start' will use legacy mode."
+    }
+
+    Remove-Item -Force $tempZip -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $tempExtract -ErrorAction SilentlyContinue
+}
+
 # -- Default file installation --
 
 function Install-Defaults {
@@ -254,17 +297,7 @@ exit /b 1
 
 cd /d "%SELAH_HOME%"
 
-rem Auto-start SearXNG (server mode = no arguments)
-if "%~1"=="" if exist "%SELAH_HOME%\searxng\start.bat" (
-    start /min "SearXNG" "%SELAH_HOME%\searxng\start.bat"
-)
-
 "%JAVA%" -jar "%JAR%" %*
-
-rem Auto-stop SearXNG (server mode)
-if "%~1"=="" if exist "%SELAH_HOME%\searxng\stop.bat" (
-    call "%SELAH_HOME%\searxng\stop.bat" >nul 2>&1
-)
 "@
     [System.IO.File]::WriteAllText($wrapperPath, $batContent, [System.Text.Encoding]::ASCII)
     if (-not $wrapperExisted) { $script:CleanupItems += $wrapperPath }
@@ -284,15 +317,32 @@ Write-Host "  Path: `$SelahHome"
 `$confirm = Read-Host "  Continue? (y/N)"
 if (`$confirm -ne 'y' -and `$confirm -ne 'Y') { Write-Host "Cancelled."; exit 0 }
 
-# 1. Remove startup entry
+# 1. Remove NSSM services
+`$nssmExe = Join-Path `$SelahHome "bin\nssm.exe"
+if (Test-Path `$nssmExe) {
+    `$null = sc.exe query selah-searxng 2>`$null
+    if (`$LASTEXITCODE -eq 0) {
+        & `$nssmExe stop selah-searxng 2>&1 | Out-Null
+        & `$nssmExe remove selah-searxng confirm 2>&1 | Out-Null
+        Write-Host "  [OK] SearXNG service removed"
+    }
+    `$null = sc.exe query selah 2>`$null
+    if (`$LASTEXITCODE -eq 0) {
+        & `$nssmExe stop selah 2>&1 | Out-Null
+        & `$nssmExe remove selah confirm 2>&1 | Out-Null
+        Write-Host "  [OK] Selah service removed"
+    }
+}
+
+# 2. Remove legacy startup entries
 `$startupLnk = Join-Path `$env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\Selah.lnk"
 if (Test-Path `$startupLnk) { Remove-Item -Force `$startupLnk; Write-Host "  [OK] Startup entry removed" }
 try { & schtasks /delete /tn "Selah" /f 2>&1 | Out-Null; Write-Host "  [OK] Scheduled task removed" } catch {}
 
-# 2. Terminate running process
+# 3. Terminate running process
 try { & taskkill /f /im java.exe /fi "WINDOWTITLE eq Selah*" 2>&1 | Out-Null } catch {}
 
-# 3. Clean up PATH
+# 4. Clean up PATH
 `$currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if (`$currentPath) {
     `$binDir = Join-Path `$SelahHome "bin"
@@ -302,10 +352,6 @@ if (`$currentPath) {
         Write-Host "  [OK] PATH entry removed"
     }
 }
-
-# 4. Stop SearXNG
-`$stopBat = Join-Path `$SelahHome "searxng\stop.bat"
-if (Test-Path `$stopBat) { & `$stopBat 2>&1 | Out-Null; Write-Host "  [OK] SearXNG stopped" }
 
 # 5. Remove directory
 Remove-Item -Recurse -Force `$SelahHome
@@ -399,6 +445,7 @@ try {
         Install-Runtime
     }
     Install-Selah
+    Install-Nssm
     Install-Defaults
     Set-SelahPath
 
@@ -449,6 +496,6 @@ Write-Success "Selah installation complete!"
 Write-Host ""
 Write-Info "To uninstall: & '$SelahHome\uninstall.ps1'"
 Write-Host ""
-Write-Info "Run the following command to start setup:"
-Write-Info "  selah setup"
+Write-Info "Next step:"
+Write-Info "  selah setup    -- Initial setup (Discord/LLM config + auto-start service)"
 Write-Host ""

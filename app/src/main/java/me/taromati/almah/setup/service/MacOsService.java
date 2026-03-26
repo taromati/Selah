@@ -45,6 +45,7 @@ public class MacOsService {
                     <key>ProgramArguments</key>
                     <array>
                         <string>%s</string>
+                        <string>_server</string>
                     </array>
                     <key>WorkingDirectory</key>
                     <string>%s</string>

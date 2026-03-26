@@ -441,8 +441,8 @@ fi
 
 cd "\${SELAH_HOME}"
 
-# 서버 시작 시 SearXNG 자동 실행 (인자 없을 때 = 서버 모드)
-if [ \$# -eq 0 ] && [ -x "\${SELAH_HOME}/searxng/start.sh" ]; then
+# 서버 모드(_server)일 때 SearXNG 자동 실행
+if [ "\$1" = "_server" ] && [ -x "\${SELAH_HOME}/searxng/start.sh" ]; then
     "\${SELAH_HOME}/searxng/start.sh" &
     SEARXNG_PID=\$!
 

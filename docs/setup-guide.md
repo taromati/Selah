@@ -37,11 +37,11 @@ selah doctor
 ## 실행
 
 ```bash
-# 직접 실행
-selah
+# 서비스 등록 + 시작 (Windows: 관리자 권한 필요)
+selah start
 
-# OS 서비스로 등록 (로그인 시 자동 시작)
-selah enable
+# 서비스 해제 + 종료
+selah stop
 ```
 
 ## Discord 봇 만들기

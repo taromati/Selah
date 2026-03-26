@@ -115,13 +115,13 @@ public class SetupWizard {
                 ServiceInstaller.install();
             } catch (Exception e) {
                 ui.warn("서비스 등록 실패: " + e.getMessage());
-                ui.info("나중에 'selah enable'로 직접 등록할 수 있습니다.");
+                ui.info("나중에 'selah start'로 직접 등록할 수 있습니다.");
             }
 
             ui.info("");
             ui.info("유용한 명령어:");
             ui.info("  설정 검증:    selah doctor");
-            ui.info("  서비스 해제:  selah disable");
+            ui.info("  서비스 해제:  selah stop");
             String uninstallCmd = "windows".equals(ServiceInstaller.detectOs())
                     ? "powershell -File \"%USERPROFILE%\\.selah\\uninstall.ps1\""
                     : "~/.selah/uninstall.sh";
