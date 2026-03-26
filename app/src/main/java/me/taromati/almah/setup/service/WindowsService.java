@@ -145,7 +145,7 @@ public class WindowsService {
         String nssmPath = nssm.toString();
 
         // SearXNG 서비스 해제
-        if (isNssmServiceInstalled(nssmPath, SEARXNG_SERVICE_NAME)) {
+        if (isServiceInstalled(SEARXNG_SERVICE_NAME)) {
             exec(nssmPath, "stop", SEARXNG_SERVICE_NAME);
             exec(nssmPath, "remove", SEARXNG_SERVICE_NAME, "confirm");
             ui.success("SearXNG 서비스 해제 완료");
@@ -153,7 +153,7 @@ public class WindowsService {
         }
 
         // Selah 서비스 해제
-        if (isNssmServiceInstalled(nssmPath, SERVICE_NAME)) {
+        if (isServiceInstalled(SERVICE_NAME)) {
             exec(nssmPath, "stop", SERVICE_NAME);
             exec(nssmPath, "remove", SERVICE_NAME, "confirm");
             ui.success("Selah 서비스 해제 완료");
@@ -173,27 +173,21 @@ public class WindowsService {
         }
     }
 
-    /** NSSM으로 서비스가 등록되어 있는지 확인 */
-    public static boolean isNssmServiceInstalled(String nssmPath, String serviceName) {
+    /** Windows 서비스가 등록되어 있는지 확인 (sc query 사용 — NSSM은 UTF-16 출력이라 파싱 불안정) */
+    public static boolean isServiceInstalled(String serviceName) {
         try {
-            Process p = new ProcessBuilder(nssmPath, "status", serviceName)
+            Process p = new ProcessBuilder("sc", "query", serviceName)
                     .redirectErrorStream(true).start();
-            String output = new String(p.getInputStream().readAllBytes()).trim();
-            p.waitFor();
-            // "SERVICE_STOPPED", "SERVICE_RUNNING" 등이면 등록됨
-            // "Can't open service" 등이면 미등록
-            return output.startsWith("SERVICE_");
+            p.getInputStream().readAllBytes();
+            return p.waitFor() == 0;
         } catch (Exception e) {
             return false;
         }
     }
 
-    /** Selah NSSM 서비스 등록 여부 확인 (ServiceRestarter, DoctorCheck에서 사용) */
+    /** Selah 서비스 등록 여부 확인 (ServiceRestarter, DoctorCheck에서 사용) */
     public static boolean isServiceRegistered() {
-        Path selahHome = resolveSelahHome();
-        Path nssm = selahHome.resolve("bin/nssm.exe");
-        if (!Files.exists(nssm)) return false;
-        return isNssmServiceInstalled(nssm.toString(), SERVICE_NAME);
+        return isServiceInstalled(SERVICE_NAME);
     }
 
     /** SearXNG NSSM 서비스 시작 시도 (2차 방어용) */
