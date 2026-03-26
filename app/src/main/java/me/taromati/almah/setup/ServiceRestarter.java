@@ -1,5 +1,7 @@
 package me.taromati.almah.setup;
 
+import me.taromati.almah.setup.service.WindowsService;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,7 +26,7 @@ public class ServiceRestarter {
         String os = ServiceInstaller.detectOs();
 
         if (!isServiceRegistered(os)) {
-            return Result.fail("서비스가 등록되어 있지 않습니다. 먼저 'selah enable'을 실행해주세요.");
+            return Result.fail("서비스가 등록되어 있지 않습니다. 먼저 'selah start'을 실행해주세요.");
         }
 
         if (async) {
@@ -59,8 +61,17 @@ public class ServiceRestarter {
                             : Result.fail("재시작 실패 (exit code: " + code + ")");
                 }
                 case "windows" -> {
-                    // 재시작 스크립트를 생성하고 현재 프로세스 종료
-                    // 새 프로세스가 3초 후 시작됨
+                    // NSSM 서비스면 nssm restart, 아니면 레거시 방식
+                    if (WindowsService.isServiceRegistered()) {
+                        Path nssm = WindowsService.resolveSelahHome().resolve("bin/nssm.exe");
+                        var proc = new ProcessBuilder(nssm.toString(), "restart", "selah")
+                                .inheritIO().start();
+                        int code = proc.waitFor();
+                        yield code == 0
+                                ? Result.ok("재시작 완료")
+                                : Result.fail("재시작 실패 (exit code: " + code + ")");
+                    }
+                    // 레거시: 재시작 스크립트 생성 후 프로세스 종료
                     String selahHome = System.getenv("SELAH_HOME");
                     if (selahHome == null || selahHome.isEmpty()) {
                         selahHome = System.getProperty("user.dir");
@@ -76,7 +87,7 @@ public class ServiceRestarter {
                     System.exit(0);
                     yield Result.ok("재시작 중...");
                 }
-                default -> Result.fail("이 OS에서는 'selah enable' 후 웹 UI의 재시작 버튼을 사용해주세요.");
+                default -> Result.fail("이 OS에서는 'selah start' 후 웹 UI의 재시작 버튼을 사용해주세요.");
             };
         } catch (Exception e) {
             return Result.fail("재시작 실패: " + e.getMessage());
@@ -97,9 +108,7 @@ public class ServiceRestarter {
                     yield proc.waitFor() == 0;
                 }
                 case "windows" -> {
-                    var proc = new ProcessBuilder("schtasks", "/query", "/tn", "Selah")
-                            .redirectErrorStream(true).start();
-                    yield proc.waitFor() == 0;
+                    yield WindowsService.isServiceRegistered();
                 }
                 default -> false;
             };

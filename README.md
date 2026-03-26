@@ -50,11 +50,12 @@ java -jar build/libs/selah-*.jar
 
 | 명령어 | 설명 |
 |--------|------|
-| `selah` | 서버 시작 |
+| `selah` | 서버 직접 실행 (포그라운드) |
 | `selah setup` | 초기 설정 마법사 |
+| `selah start` | 서비스 등록 + 시작 (백그라운드) |
+| `selah stop` | 서비스 해제 + 종료 |
+| `selah restart` | 서비스 재시작 |
 | `selah doctor` | 설정 검증 |
-| `selah enable` | OS 서비스 등록 (자동 시작) |
-| `selah disable` | 서비스 해제 |
 | `selah update` | 자체 업데이트 |
 | `selah --version` | 버전 출력 |
 

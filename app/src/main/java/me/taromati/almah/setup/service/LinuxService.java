@@ -35,7 +35,7 @@ public class LinuxService {
                 Type=simple
                 WorkingDirectory=%s
                 Environment=SELAH_HOME=%s
-                ExecStart=%s
+                ExecStart=%s _server
                 Restart=on-failure
                 RestartSec=10
                 StandardOutput=null

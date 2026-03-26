@@ -528,9 +528,61 @@ try {
 
 if (-not $InstallSuccess) { exit 1 }
 
+# -- Step 7: Register NSSM service (if NSSM available) --
+
+$nssmExe = Join-Path $SelahHome "bin\nssm.exe"
+$searxngRun = Join-Path $SearxngDir ".venv\Scripts\searxng-run.exe"
+
+if ((Test-Path $nssmExe) -and (Test-Path $searxngRun)) {
+    Write-Info "Registering SearXNG as Windows service..."
+
+    # Check admin
+    $isAdmin = $false
+    try {
+        $null = & net session 2>&1
+        if ($LASTEXITCODE -eq 0) { $isAdmin = $true }
+    } catch {}
+
+    if ($isAdmin) {
+        $settingsPath = Join-Path $SearxngDir "settings.yml"
+        $logsDir = Join-Path $SelahHome "logs"
+        if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Force -Path $logsDir | Out-Null }
+
+        # Remove existing service
+        & $nssmExe stop selah-searxng 2>&1 | Out-Null
+        & $nssmExe remove selah-searxng confirm 2>&1 | Out-Null
+
+        & $nssmExe install selah-searxng $searxngRun
+        & $nssmExe set selah-searxng AppDirectory $SearxngDir
+        & $nssmExe set selah-searxng AppEnvironmentExtra "SEARXNG_SETTINGS_PATH=$settingsPath"
+        & $nssmExe set selah-searxng DisplayName "Selah SearXNG"
+        & $nssmExe set selah-searxng Description "SearXNG meta-search engine for Selah"
+        & $nssmExe set selah-searxng AppStdout (Join-Path $logsDir "searxng-stdout.log")
+        & $nssmExe set selah-searxng AppStderr (Join-Path $logsDir "searxng-stderr.log")
+        & $nssmExe set selah-searxng AppStdoutCreationDisposition 4
+        & $nssmExe set selah-searxng AppStderrCreationDisposition 4
+        & $nssmExe set selah-searxng AppExit Default Restart
+        & $nssmExe set selah-searxng AppRestartDelay 5000
+        & $nssmExe set selah-searxng Start SERVICE_AUTO_START
+
+        & $nssmExe start selah-searxng
+
+        Write-Success "SearXNG registered as Windows service (selah-searxng)"
+    } else {
+        Write-Warn "Admin privileges required for service registration."
+        Write-Info "Run 'selah start' as administrator to register services."
+    }
+} else {
+    if (-not (Test-Path $nssmExe)) {
+        Write-Info "NSSM not found. SearXNG will start with Selah (legacy mode)."
+    }
+}
+
 Write-Host ""
 Write-Success "SearXNG installation complete!"
 Write-Info "Location: $SearxngDir"
-Write-Info "Start: $SearxngDir\start.bat (or start.ps1)"
 Write-Info "Port: $SearxngPort (localhost only)"
+Write-Host ""
+Write-Host "  To reinstall SearXNG later:" -ForegroundColor Yellow
+Write-Host "  powershell -c `"irm https://raw.githubusercontent.com/taromati/Selah/main/install-searxng.ps1 | iex`"" -ForegroundColor Cyan
 Write-Host ""
