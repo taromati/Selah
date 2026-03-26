@@ -1,0 +1,45 @@
+# Build
+build/
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+!libs/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Gradle
+.gradle/
+gradle-app.setting
+
+# Logs
+logs/
+*.log
+
+# Runtime data
+config.yml
+*.sqlite
+agent-data/
+*-data/
+.env
+
+# Node
+app/web/node_modules/
+app/web/dist/
+app/web/tsconfig.tsbuildinfo
+
+# Tests
+**/src/test/
+app/web/src/__tests__/
+app/web/vitest.config.ts
+
+# AI tools
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
