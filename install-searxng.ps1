@@ -570,10 +570,6 @@ if ((Test-Path $nssmExe) -and (Test-Path $searxngRun)) {
         & $nssmExe set selah-searxng AppEnvironmentExtra "SEARXNG_SETTINGS_PATH=$settingsPath"
         & $nssmExe set selah-searxng DisplayName "Selah SearXNG"
         & $nssmExe set selah-searxng Description "SearXNG meta-search engine for Selah"
-        & $nssmExe set selah-searxng AppStdout (Join-Path $logsDir "searxng-stdout.log")
-        & $nssmExe set selah-searxng AppStderr (Join-Path $logsDir "searxng-stderr.log")
-        & $nssmExe set selah-searxng AppStdoutCreationDisposition 4
-        & $nssmExe set selah-searxng AppStderrCreationDisposition 4
         & $nssmExe set selah-searxng AppExit Default Restart
         & $nssmExe set selah-searxng AppRestartDelay 5000
         & $nssmExe set selah-searxng Start SERVICE_AUTO_START

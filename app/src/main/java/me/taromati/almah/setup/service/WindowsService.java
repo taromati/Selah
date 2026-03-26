@@ -48,6 +48,10 @@ public class WindowsService {
             throw new IllegalStateException("JAR 파일을 찾을 수 없습니다.");
         }
 
+        // 사용자 계정으로 실행 (홈 디렉토리 접근 필요 — Codex auth 등)
+        String username = System.getProperty("user.name");
+        String password = ui.promptSecret("Windows 비밀번호 (" + username + ")");
+
         String nssmPath = nssm.toString();
         exec(nssmPath, "install", SERVICE_NAME, java.toString());
         exec(nssmPath, "set", SERVICE_NAME, "AppParameters", "-jar " + jar + " _server");
@@ -55,12 +59,7 @@ public class WindowsService {
         exec(nssmPath, "set", SERVICE_NAME, "AppEnvironmentExtra", "SELAH_HOME=" + selahHome);
         exec(nssmPath, "set", SERVICE_NAME, "DisplayName", "Selah");
         exec(nssmPath, "set", SERVICE_NAME, "Description", "Selah AI Agent Bot");
-        exec(nssmPath, "set", SERVICE_NAME, "AppStdout",
-                selahHome.resolve("logs/nssm-stdout.log").toString());
-        exec(nssmPath, "set", SERVICE_NAME, "AppStderr",
-                selahHome.resolve("logs/nssm-stderr.log").toString());
-        exec(nssmPath, "set", SERVICE_NAME, "AppStdoutCreationDisposition", "4");
-        exec(nssmPath, "set", SERVICE_NAME, "AppStderrCreationDisposition", "4");
+        exec(nssmPath, "set", SERVICE_NAME, "ObjectName", ".\\" + username, password);
         exec(nssmPath, "set", SERVICE_NAME, "AppExit", "Default", "Restart");
         exec(nssmPath, "set", SERVICE_NAME, "AppRestartDelay", "10000");
         exec(nssmPath, "set", SERVICE_NAME, "Start", "SERVICE_AUTO_START");
@@ -116,12 +115,6 @@ public class WindowsService {
         exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "DisplayName", "Selah SearXNG");
         exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "Description",
                 "SearXNG meta-search engine for Selah");
-        exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "AppStdout",
-                selahHome.resolve("logs/searxng-stdout.log").toString());
-        exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "AppStderr",
-                selahHome.resolve("logs/searxng-stderr.log").toString());
-        exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "AppStdoutCreationDisposition", "4");
-        exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "AppStderrCreationDisposition", "4");
         exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "AppExit", "Default", "Restart");
         exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "AppRestartDelay", "5000");
         exec(nssmPath, "set", SEARXNG_SERVICE_NAME, "Start", "SERVICE_AUTO_START");
