@@ -7,13 +7,7 @@ export interface LogLine {
   level: 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | ''
 }
 
-/**
- * 라이브 로그 폴링 공통 composable.
- * Agent 라이브 로그 표시용.
- *
- * API 응답: RootResponse<List<String>> — 각 항목은 JSON 문자열
- * {"time":"...","level":"...","logger":"...","message":"..."}
- */
+/** 라이브 로그 폴링 공통 composable. */
 export function useLiveLogs(apiUrl: string, lines = 200, intervalMs = 3000) {
   const logs = ref<LogLine[]>([])
   const autoScroll = ref(true)

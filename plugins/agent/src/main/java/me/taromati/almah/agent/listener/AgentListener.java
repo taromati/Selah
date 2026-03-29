@@ -3,6 +3,7 @@ package me.taromati.almah.agent.listener;
 import lombok.extern.slf4j.Slf4j;
 import me.taromati.almah.agent.chat.AutoHandoffHandler;
 import me.taromati.almah.agent.chat.ChatOrchestrator;
+import me.taromati.almah.agent.chat.EmbedResponseParser;
 import me.taromati.almah.agent.chat.ChatTerminationClassifier;
 import me.taromati.almah.agent.chat.HandoffResumptionHandler;
 import me.taromati.almah.agent.chat.ChatSessionManager;
@@ -16,6 +17,8 @@ import me.taromati.almah.core.util.PluginMdc;
 import me.taromati.almah.core.util.StringUtils;
 import me.taromati.almah.llm.client.LlmClientResolver;
 import me.taromati.almah.llm.client.OpenAiClientException;
+import me.taromati.almah.llm.tool.LoopCallbacks;
+import me.taromati.almah.llm.tool.ToolCallingService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -25,6 +28,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +38,9 @@ import java.util.stream.Collectors;
  * <h2>명령어 체계</h2>
  * <pre>
  * !도움말                              전체 명령어 안내
+ *
+ * [긴급]
+ * !@                                   긴급 정지 (작업 중단, 세션 유지)
  *
  * [세션]
  * !초기화                              대화 세션 초기화
@@ -61,8 +68,7 @@ import java.util.stream.Collectors;
 @ConditionalOnProperty(prefix = "plugins.agent", name = "enabled", havingValue = "true")
 public class AgentListener implements PluginListener {
 
-    private static final int MAX_CONTINUATIONS = 3;
-    private static final int CONTINUATION_TIMEOUT_MINUTES = 2;
+    // config.getMaxContinuations(), config.getContinuationTimeoutMinutes() → AgentConfigProperties로 이동
 
     private final AgentConfigProperties config;
     private final AgentSessionService agentSessionService;
@@ -124,7 +130,15 @@ public class AgentListener implements PluginListener {
             return;
         }
 
-        // 2. !초기화 / !reset
+        // 2. !@ — 긴급 정지 (세션 유지, 현재 루프만 중단)
+        if (content.equals("!@")) {
+            chatSessionManager.requestCancel(channelId);
+            chatSessionManager.clearPendingMessages(channelId);
+            messengerRegistry.sendText(channel, "⏹️ 멈췄어요!");
+            return;
+        }
+
+        // 3. !초기화 / !reset
         if (content.equals("!초기화") || content.equals("!reset")) {
             chatSessionManager.requestCancel(channelId);
             chatSessionManager.clearPendingMessages(channelId);
@@ -328,22 +342,9 @@ public class AgentListener implements PluginListener {
         messengerRegistry.sendText(channel,
                 "\uD83D\uDCCB 이전 작업 '" + StringUtils.truncate(ctx.title(), 50) + "'을 이어서 진행합니다.");
 
-        String prompt = handoffResumptionHandler.buildResumptionPrompt(ctx);
-
-        var session = chatSessionManager.getOrCreateSession(channelId);
-        agentSessionService.generateTitle(session.getId(), "이어하기: " + ctx.title());
-
-        ChatOrchestrator.ChatResult result = chatOrchestrator.handle(channelId, prompt, channel);
-
-        if (result.isCancelled()) {
-            return result;
-        }
-
-        String responseText = result.response();
-        if (responseText == null || responseText.isBlank()) responseText = "(빈 응답)";
-        messengerRegistry.sendText(channel, responseText);
-
-        return result;
+        // 재개 턴도 일반 턴과 동일한 이어하기 루프를 사용 (S07)
+        String initialPrompt = handoffResumptionHandler.buildResumptionPrompt(ctx);
+        return processRegularChatTurn(channel, initialPrompt, channelId);
     }
 
     static boolean isHandoffResumeMarker(String message) {
@@ -363,22 +364,79 @@ public class AgentListener implements PluginListener {
         ChatTerminationClassifier.Classification lastClassification = null;
         String lastResponse = null;
 
+        // StreamingMessageHandler: 플레이스홀더 전송 + 스트리밍 콜백 일체형 (S04)
+        StreamingMessageHandler handler = new StreamingMessageHandler(messengerRegistry, channel,
+                config.getStreamingDebounceMs(), config.getStreamingSplitThreshold());
+
+        // 실시간 중간 텍스트 콜백 — 디스코드에 즉시 전송 (Phase 2 호환)
+        Consumer<String> onIntermediateText = text -> {
+            var parsed = EmbedResponseParser.parse(text);
+            if (parsed.hasEmbeds()) {
+                if (parsed.text() != null && !parsed.text().isBlank()) {
+                    messengerRegistry.sendText(channel, parsed.text());
+                }
+                for (var embed : parsed.embeds()) {
+                    messengerRegistry.sendWithEmbed(channel, null, embed);
+                }
+            } else {
+                messengerRegistry.sendText(channel, text);
+            }
+        };
+
+        LoopCallbacks loopCallbacks = new LoopCallbacks(
+                onIntermediateText,
+                () -> {
+                    String msg = chatSessionManager.drainPending(channelId);
+                    if (msg != null) {
+                        chatSessionManager.saveMessage(session.getId(), "user", msg, null, null, null);
+                    }
+                    return msg;
+                }
+        );
+
         while (true) {
-            ChatOrchestrator.ChatResult result = chatOrchestrator.handle(channelId, currentMessage, channel);
+            ChatOrchestrator.ChatResult result;
+            try {
+                result = chatOrchestrator.handle(channelId, currentMessage, channel, loopCallbacks, handler);
+            } catch (Exception e) {
+                log.error("[AgentListener] chatOrchestrator.handle error: {}", e.getMessage(), e);
+                handler.forceEnd("❌ 처리 중 오류가 발생했습니다: " + e.getMessage());
+                throw e;
+            }
 
             if (result.isCancelled()) {
+                handler.cancel();
                 return result;
             }
+
+            // 정상/라운드 소진 모두: 잔여 버퍼 확정 + embed → 인용 변환 (부분 응답 먼저 표시)
+            handler.finalizeMessage();
 
             String responseText = result.response();
             if (responseText == null || responseText.isBlank()) responseText = "(빈 응답)";
             lastResponse = responseText;
             lastClassification = result.classification();
 
-            if (result.images() != null && !result.images().isEmpty()) {
+            // 이미지 처리: handler가 메시지를 관리하므로 이미지만 별도 전송
+            if (handler.getMessageId() != null) {
+                if (result.images() != null && !result.images().isEmpty()) {
+                    messengerRegistry.sendWithImages(channel, null, result.images());
+                }
+            } else if (result.images() != null && !result.images().isEmpty()) {
                 messengerRegistry.sendWithImages(channel, responseText, result.images());
             } else {
-                messengerRegistry.sendText(channel, responseText);
+                // handler messageId가 null (스트리밍 불가 경로) — fallback 전송
+                var parsed = EmbedResponseParser.parse(responseText);
+                if (parsed.hasEmbeds()) {
+                    if (parsed.text() != null && !parsed.text().isBlank()) {
+                        messengerRegistry.sendText(channel, parsed.text());
+                    }
+                    for (var embed : parsed.embeds()) {
+                        messengerRegistry.sendWithEmbed(channel, null, embed);
+                    }
+                } else {
+                    messengerRegistry.sendText(channel, responseText);
+                }
             }
 
             if (!result.roundsExhausted()) return result;
@@ -391,7 +449,7 @@ public class AgentListener implements PluginListener {
                 return result;
             }
 
-            if (continuations >= MAX_CONTINUATIONS) {
+            if (continuations >= config.getMaxContinuations()) {
                 String taskId = autoHandoffHandler.handleClassified(userMessage, lastResponse, lastClassification);
                 if (taskId != null) {
                     InteractiveMessage msg = new InteractiveMessage(
@@ -412,23 +470,26 @@ public class AgentListener implements PluginListener {
                 continuationNote = "\n\u26A0\uFE0F 진행이 정체되었습니다 \u2014 " + lastClassification.detail();
             }
 
-            boolean approved = requestContinuation(channel, continuations + 1, MAX_CONTINUATIONS, continuationNote, channelId);
+            boolean approved = requestContinuation(channel, continuations + 1, config.getMaxContinuations(), continuationNote, channelId);
             if (!approved) {
-                if (!chatSessionManager.hasPendingMessages(channelId)) {
-                    String taskId = autoHandoffHandler.handleClassified(userMessage, lastResponse, lastClassification);
-                    if (taskId != null) {
-                        InteractiveMessage msg = new InteractiveMessage(
-                                "\uD83D\uDCCB 작업을 할 일에 등록했습니다.",
-                                List.of(new InteractiveMessage.Action(
-                                        "agent-resume:" + taskId.substring(0, 8), "이어하기",
-                                        InteractiveMessage.ActionStyle.PRIMARY)));
-                        messengerRegistry.sendInteractive(channel, msg);
-                    } else {
-                        messengerRegistry.sendText(channel, "\uD83D\uDCCB 작업을 할 일에 등록했습니다.");
-                    }
+                // S05: pending 메시지 유무와 무관하게 항상 핸드오프 실행
+                // pending 메시지가 있으면 handleChatLoop의 drain 루프에서 새 턴 시작
+                String taskId = autoHandoffHandler.handleClassified(userMessage, lastResponse, lastClassification);
+                if (taskId != null) {
+                    InteractiveMessage msg = new InteractiveMessage(
+                            "\uD83D\uDCCB 작업을 저장했습니다.",
+                            List.of(new InteractiveMessage.Action(
+                                    "agent-resume:" + taskId.substring(0, 8), "이어하기",
+                                    InteractiveMessage.ActionStyle.PRIMARY)));
+                    messengerRegistry.sendInteractive(channel, msg);
+                } else {
+                    messengerRegistry.sendText(channel, "\uD83D\uDCCB 작업을 저장했습니다.");
                 }
                 return result;
             }
+
+            // S11: 새 라운드 — 새 플레이스홀더 + 버퍼/히스토리 초기화
+            handler.newRound();
 
             if (exitReason == ChatTerminationClassifier.ChatExitReason.PROGRESS_STALLED) {
                 currentMessage = "[시스템 요청] 이전 작업을 이어서 진행해주세요. " +
@@ -465,14 +526,18 @@ public class AgentListener implements PluginListener {
         });
         chatSessionManager.setContinuationFuture(channelId, boolFuture);
         try {
-            ActionEvent event = handle.waitForAction(CONTINUATION_TIMEOUT_MINUTES, TimeUnit.MINUTES);
-            if (event == null) {
-                handle.editText(text + "\n\u23F0 시간 초과");
-                return false;
-            }
-            boolean yes = "agent-continue-yes".equals(event.actionId());
+            // boolFuture로 대기 — 버튼 클릭(handle.getFuture→boolFuture)과
+            // !@ 취소(completeContinuationFuture→boolFuture) 모두 즉시 해제
+            Boolean approved = boolFuture.get(config.getContinuationTimeoutMinutes(), TimeUnit.MINUTES);
+            boolean yes = Boolean.TRUE.equals(approved);
             handle.editText(text + (yes ? "\n\u2705 이어서 진행합니다." : "\n\u274C 종료되었습니다."));
             return yes;
+        } catch (java.util.concurrent.TimeoutException e) {
+            handle.editText(text + "\n\u23F0 시간 초과");
+            return false;
+        } catch (Exception e) {
+            handle.editText(text + "\n\u23F0 시간 초과");
+            return false;
         } finally {
             chatSessionManager.clearContinuationFuture(channelId);
         }
@@ -485,6 +550,7 @@ public class AgentListener implements PluginListener {
                 **Agent 명령어 안내**
 
                 **[세션]**
+                `!@` — 긴급 정지 (작업 중단, 세션 유지)
                 `!초기화` — 대화 세션 초기화
 
                 **[AI 모델]**

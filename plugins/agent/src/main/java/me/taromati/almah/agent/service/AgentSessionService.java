@@ -106,6 +106,7 @@ public class AgentSessionService {
         int maxKeep = channelId.startsWith("routine:")
                 ? 3  // routine은 3개만
                 : config.getSession().getMaxInactiveSessions();
+        if (maxKeep <= 0) return; // 0 이하면 무제한 유지
         List<AgentSessionEntity> sessions = sessionRepository
                 .findByChannelIdAndActiveFalseOrderByUpdatedAtDesc(channelId);
         if (sessions.size() <= maxKeep) return;

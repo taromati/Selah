@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * skill 관리 도구 — 스킬 목록/활성화/비활성화/추가/제거/설치/검색.
+ * skill 관리 도구 — 스킬 목록/조회/수정/활성화/비활성화/추가/제거/설치/검색.
  */
 @Slf4j
 @Component
@@ -30,7 +30,7 @@ public class SkillToolHandler {
                     .type("function")
                     .function(ChatCompletionRequest.ToolDefinition.Function.builder()
                             .name("skill")
-                            .description("스킬 관리 (목록/조회/활성화/비활성화/추가/제거/설치/검색)")
+                            .description("스킬 관리 (목록/조회/수정/활성화/비활성화/추가/제거/설치/검색)")
                             .parameters(buildParameters())
                             .build())
                     .build();
@@ -65,6 +65,7 @@ public class SkillToolHandler {
                 case "enable" -> handleEnable(args);
                 case "disable" -> handleDisable(args);
                 case "add" -> handleAdd(args);
+                case "edit" -> handleEdit(args);
                 case "remove" -> handleRemove(args);
                 case "install" -> handleInstall(args);
                 case "search" -> handleSearch(args);
@@ -186,6 +187,25 @@ public class SkillToolHandler {
         }
     }
 
+    private ToolResult handleEdit(Map<String, Object> args) {
+        String name = (String) args.get("name");
+        String content = (String) args.get("content");
+        if (name == null || name.isBlank()) return ToolResult.text("name이 필요합니다");
+        if (content == null || content.isBlank()) return ToolResult.text("content가 필요합니다");
+
+        var cached = skillManager.get(name);
+        if (cached == null) return ToolResult.text("스킬을 찾을 수 없습니다: " + name);
+
+        try {
+            skillManager.update(name, content);
+            var updated = skillManager.get(name);
+            String status = updated != null ? updated.gatingResult().status().name() : "UNKNOWN";
+            return ToolResult.text("스킬 '" + name + "' 수정됨 (게이팅: " + status + ")");
+        } catch (Exception e) {
+            return ToolResult.text("스킬 수정 실패: " + e.getMessage());
+        }
+    }
+
     private ToolResult handleRemove(Map<String, Object> args) {
         String name = (String) args.get("name");
         if (name == null || name.isBlank()) return ToolResult.text("name이 필요합니다");
@@ -250,11 +270,11 @@ public class SkillToolHandler {
         properties.put("action", Map.of(
                 "type", "string",
                 "description", "수행할 작업",
-                "enum", List.of("list", "view", "enable", "disable", "add", "remove", "install", "search")));
+                "enum", List.of("list", "view", "enable", "disable", "add", "edit", "remove", "install", "search")));
         properties.put("name", Map.of("type", "string",
-                "description", "스킬 이름 (view/enable/disable/add/remove)"));
+                "description", "스킬 이름 (view/enable/disable/add/edit/remove)"));
         properties.put("content", Map.of("type", "string",
-                "description", "SKILL.md 전체 내용 (add)"));
+                "description", "SKILL.md 전체 내용 (add/edit)"));
         properties.put("source", Map.of("type", "string",
                 "description", "소스 유형 (install). clawhub은 slug, github/url은 URL",
                 "enum", List.of("github", "url", "clawhub")));

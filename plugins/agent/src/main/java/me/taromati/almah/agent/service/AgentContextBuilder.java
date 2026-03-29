@@ -87,7 +87,6 @@ public class AgentContextBuilder {
         }
         appendPersistentContext(sb);
         appendMemoryContext(sb, messages);
-        appendCuratedMemory(sb);
         appendUserProfile(sb);
         appendRoutineHistory(sb);
         appendProviderHints(sb, client);
@@ -106,7 +105,7 @@ public class AgentContextBuilder {
     /**
      * 서브에이전트용 시스템 프롬프트 조립.
      * OpenClaw ALLOWLIST 패턴: GUIDE.md + TOOLS.md + 스킬 + MCP + providerHints.
-     * PERSONA.md, MEMORY.md, Memory Context, 루틴 이력 제외.
+     * PERSONA.md, Memory Context, 루틴 이력 제외.
      */
     public String buildSubagentSystemContent(String task, LlmClient client) {
         StringBuilder sb = new StringBuilder();
@@ -461,13 +460,6 @@ public class AgentContextBuilder {
             }
         }
         return queryBuilder.isEmpty() ? "최근 대화 맥락" : queryBuilder.toString();
-    }
-
-    private void appendCuratedMemory(StringBuilder sb) {
-        String memoryMd = persistentContextReader.readMemoryMd();
-        if (memoryMd != null && !memoryMd.isEmpty()) {
-            sb.append("\n\n---\n[학습 기억]\n").append(memoryMd);
-        }
     }
 
     private void appendUserProfile(StringBuilder sb) {

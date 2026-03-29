@@ -20,7 +20,7 @@ import java.util.Map;
 
 /**
  * 영속 컨텍스트 파일 리더.
- * agent-data/ 디렉토리에서 TOOLS.md, PERSONA.md, MEMORY.md, skills/ 를 읽습니다.
+ * agent-data/ 디렉토리에서 TOOLS.md, PERSONA.md, GUIDE.md, USER.md, skills/ 를 읽습니다.
  */
 @Slf4j
 @Service
@@ -31,7 +31,6 @@ public class PersistentContextReader {
     private static final int MAX_TOOLS_MD_LINES = 500;
     private static final int MAX_PERSONA_MD_LINES = 200;
     private static final int MAX_GUIDE_MD_LINES = 300;
-    private static final int MAX_MEMORY_MD_LINES = 200;
     private static final int MAX_USER_MD_LINES = 200;
     // MAX_SKILL_CHARS 제거 — content는 skill(action=view) 도구로 전체 반환
     private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
@@ -108,29 +107,6 @@ public class PersistentContextReader {
     }
 
     /**
-     * MEMORY.md 읽기. 파일 없으면 null.
-     */
-    public String readMemoryMd() {
-        Path path = resolveDataDir().resolve("MEMORY.md");
-        return readFileWithLineLimit(path, MAX_MEMORY_MD_LINES);
-    }
-
-    /**
-     * MEMORY.md 쓰기. 디렉토리 없으면 자동 생성.
-     */
-    public void writeMemoryMd(String content) {
-        Path path = resolveDataDir().resolve("MEMORY.md");
-        try {
-            Files.createDirectories(path.getParent());
-            Files.writeString(path, content);
-            log.info("[PersistentContext] Wrote MEMORY.md ({} chars)", content.length());
-        } catch (IOException e) {
-            log.error("[PersistentContext] Failed to write MEMORY.md: {}", e.getMessage());
-            throw new RuntimeException("Failed to write MEMORY.md", e);
-        }
-    }
-
-    /**
      * USER.md 읽기. 파일 없으면 null.
      */
     public String readUserMd() {
@@ -189,8 +165,6 @@ public class PersistentContextReader {
         if (guideMd != null) total += guideMd.length();
         String toolsMd = readToolsMd();
         if (toolsMd != null) total += toolsMd.length();
-        String memoryMd = readMemoryMd();
-        if (memoryMd != null) total += memoryMd.length();
         String userMd = readUserMd();
         if (userMd != null) total += userMd.length();
         for (SkillFile skill : readActiveSkills()) {

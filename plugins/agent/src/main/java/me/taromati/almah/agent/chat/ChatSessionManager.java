@@ -126,9 +126,11 @@ public class ChatSessionManager {
 
     /**
      * 채널의 진행 중인 Tool Calling 루프 취소 요청.
+     * continuation 대기 중이면 즉시 완료하여 최대 2분 대기 방지.
      */
     public void requestCancel(String channelId) {
         cancelFlags.put(channelId, true);
+        completeContinuationFuture(channelId, false);
     }
 
     /**
@@ -149,7 +151,7 @@ public class ChatSessionManager {
 
     /**
      * 채널 acquire 시도. idle이면 acquire + true 반환.
-     * busy이면 pending 큐에 메시지 추가 + cancel 요청 + continuation future 해제 + false 반환.
+     * busy이면 pending 큐에 메시지 추가 + false 반환 (cancel 안 함 — 실시간 루프에서 소비).
      */
     public boolean tryAcquireOrQueue(String channelId, String message) {
         ChannelState state = channelStates.computeIfAbsent(channelId, k -> new ChannelState());
@@ -160,8 +162,6 @@ public class ChatSessionManager {
             }
             state.pendingMessages.add(message);
         }
-        requestCancel(channelId);
-        completeContinuationFuture(channelId, false);
         return false;
     }
 
@@ -181,6 +181,22 @@ public class ChatSessionManager {
             List<String> drained = new ArrayList<>(state.pendingMessages);
             state.pendingMessages.clear();
             return drained;
+        }
+    }
+
+    /**
+     * release 없이 pending 메시지만 drain. 실시간 루프에서 매 라운드마다 호출.
+     * 메시지가 있으면 "\n"으로 합산하여 반환. 없으면 null.
+     * 채널 busy 상태는 유지된다.
+     */
+    public String drainPending(String channelId) {
+        ChannelState state = channelStates.get(channelId);
+        if (state == null) return null;
+        synchronized (state.lock) {
+            if (state.pendingMessages.isEmpty()) return null;
+            List<String> drained = new ArrayList<>(state.pendingMessages);
+            state.pendingMessages.clear();
+            return drained.size() == 1 ? drained.getFirst() : String.join("\n", drained);
         }
     }
 

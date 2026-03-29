@@ -2,6 +2,7 @@ package me.taromati.almah.core.messenger.discord;
 
 import lombok.extern.slf4j.Slf4j;
 import me.taromati.almah.core.messenger.*;
+import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
@@ -135,6 +136,15 @@ public class DiscordMessengerGateway implements MessengerGateway {
     }
 
     @Override
+    public String sendTextAndGetId(ChannelRef channel, String message) {
+        if (jda == null) return null;
+        TextChannel textChannel = jda.getTextChannelById(channel.channelId());
+        if (textChannel == null) return null;
+        Message sent = textChannel.sendMessage(message).complete();
+        return sent.getId();
+    }
+
+    @Override
     public void editMessage(ChannelRef channel, String messageId, String newText) {
         if (jda == null) return;
         TextChannel textChannel = jda.getTextChannelById(channel.channelId());
@@ -142,6 +152,45 @@ public class DiscordMessengerGateway implements MessengerGateway {
         textChannel.editMessageById(messageId, newText)
                 .setComponents()
                 .queue(null, e -> log.warn("[Discord] editMessage 실패: {}", e.getMessage()));
+    }
+
+    @Override
+    public void deleteMessage(ChannelRef channel, String messageId) {
+        if (jda == null) return;
+        TextChannel textChannel = jda.getTextChannelById(channel.channelId());
+        if (textChannel == null) return;
+        textChannel.deleteMessageById(messageId)
+                .queue(null, e -> log.warn("[Discord] deleteMessage 실패: {}", e.getMessage()));
+    }
+
+    @Override
+    public void sendWithEmbed(ChannelRef channel, String text, EmbedData embed) {
+        if (jda == null) return;
+        TextChannel textChannel = jda.getTextChannelById(channel.channelId());
+        if (textChannel == null) return;
+
+        // 본문 텍스트가 있으면 먼저 전송
+        if (text != null && !text.isBlank()) {
+            DiscordMessageSender.sendText(textChannel, text);
+        }
+
+        // Embed 전송 (권한 없으면 일반 텍스트 fallback)
+        String desc = embed.description();
+        if (desc != null && !desc.isBlank()) {
+            try {
+                if (desc.length() > 4096) {
+                    desc = desc.substring(0, 4093) + "...";
+                }
+                var embedObj = new EmbedBuilder()
+                        .setDescription(desc)
+                        .setColor(0x5865F2) // Discord blurple
+                        .build();
+                textChannel.sendMessageEmbeds(embedObj).queue();
+            } catch (net.dv8tion.jda.api.exceptions.InsufficientPermissionException e) {
+                log.warn("[Discord] Embed 권한 없음, 텍스트로 fallback: {}", e.getMessage());
+                DiscordMessageSender.sendText(textChannel, desc);
+            }
+        }
     }
 
     // ─── Discord 전용 메서드 ───

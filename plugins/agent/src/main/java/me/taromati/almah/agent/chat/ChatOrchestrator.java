@@ -17,6 +17,9 @@ import me.taromati.almah.llm.client.LlmClientResolver;
 import me.taromati.almah.llm.client.SamplingParams;
 import me.taromati.almah.llm.client.dto.ChatMessage;
 import me.taromati.almah.core.messenger.ChannelRef;
+import me.taromati.almah.llm.tool.LoopCallbacks;
+import me.taromati.almah.llm.tool.LoopContext;
+import me.taromati.almah.llm.tool.StreamingListener;
 import me.taromati.almah.llm.tool.ToolCallingService;
 import me.taromati.almah.llm.tool.ToolExecutionFilter;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,6 +29,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -61,15 +65,65 @@ public class ChatOrchestrator {
      * @return 대화 결과 (null이면 응답 없음)
      */
     public ChatResult handle(String channelId, String userMessage, ChannelRef channel) {
+        return handle(channelId, userMessage, channel, null);
+    }
+
+    /**
+     * 사용자 메시지 처리 (실시간 대화 루프용).
+     * onIntermediateText 콜백으로 중간 텍스트를 즉시 전송한다.
+     */
+    public ChatResult handle(String channelId, String userMessage, ChannelRef channel,
+                             Consumer<String> onIntermediateText) {
         if (busyState != null) busyState.setChatBusy(true);
         try {
-            return doHandle(channelId, userMessage, channel);
+            return doHandle(channelId, userMessage, channel, onIntermediateText);
         } finally {
             if (busyState != null) busyState.setChatBusy(false);
         }
     }
 
-    private ChatResult doHandle(String channelId, String userMessage, ChannelRef channel) {
+    /**
+     * 사용자 메시지 처리 (SSE 스트리밍 루프용 — LoopCallbacks + StreamingListener).
+     * 새 인터페이스 기반. AgentListener에서 StreamingMessageHandler를 직접 전달한다.
+     *
+     * @param loopCallbacks onIntermediateText + incomingMessagePoll 묶음
+     * @param streamingListener SSE 토큰 스트리밍 리스너 (null이면 동기 경로)
+     */
+    public ChatResult handle(String channelId, String userMessage, ChannelRef channel,
+                             LoopCallbacks loopCallbacks, StreamingListener streamingListener) {
+        if (busyState != null) busyState.setChatBusy(true);
+        try {
+            return doHandle(channelId, userMessage, channel, loopCallbacks, streamingListener);
+        } finally {
+            if (busyState != null) busyState.setChatBusy(false);
+        }
+    }
+
+    private ChatResult doHandle(String channelId, String userMessage, ChannelRef channel,
+                                Consumer<String> onIntermediateText) {
+        return doHandle(channelId, userMessage, channel, onIntermediateText, (StreamingListener) null);
+    }
+
+    private ChatResult doHandle(String channelId, String userMessage, ChannelRef channel,
+                                LoopCallbacks loopCallbacks, StreamingListener streamingListener) {
+        Consumer<String> onIntermediateText = loopCallbacks != null ? loopCallbacks.onIntermediateText() : null;
+        return doHandleCore(channelId, userMessage, channel, onIntermediateText, loopCallbacks, streamingListener);
+    }
+
+    private ChatResult doHandle(String channelId, String userMessage, ChannelRef channel,
+                                Consumer<String> onIntermediateText,
+                                StreamingListener streamingListener) {
+        // 기존 Consumer<String> 경로 → LoopCallbacks로 감싸서 core에 위임
+        LoopCallbacks callbacks = onIntermediateText != null
+                ? new LoopCallbacks(onIntermediateText, null)
+                : null;
+        return doHandleCore(channelId, userMessage, channel, onIntermediateText, callbacks, streamingListener);
+    }
+
+    private ChatResult doHandleCore(String channelId, String userMessage, ChannelRef channel,
+                                    Consumer<String> onIntermediateText,
+                                    LoopCallbacks loopCallbacks,
+                                    StreamingListener streamingListener) {
         // 0. 미응답 제안에 대한 사용자 응답 기록 (H7 + M14)
         if (suggestHistory != null) {
             suggestHistory.recordPendingResponse(userMessage);
@@ -101,13 +155,23 @@ public class ChatOrchestrator {
         ToolExecutionFilter filter = permissionGate.createChatFilter(null, channel);
 
         // 6.5. 도구 예산 안내 (별도 system 메시지로 주입) (M8)
-        int maxDurationMinutes = 5;
+        int maxDurationMinutes = config.getMaxDurationMinutes();
         int warningMinute = Math.max(1, maxDurationMinutes - 1);
         context.add(ChatMessage.builder().role("system")
                 .content("[내부 지침] 이 턴의 도구 실행 시간 한도는 최대 " + maxDurationMinutes + "분입니다. "
                         + warningMinute + "분 경과 시 잔여 작업을 정리하세요. "
                         + "이 안내는 사용자에게 보이지 않으므로 응답에 언급하지 마세요.")
                 .build());
+
+        // 6.6. 실시간 메시지 수신 안내 (S12 — onIntermediateText가 non-null일 때만)
+        if (onIntermediateText != null) {
+            context.add(ChatMessage.builder().role("system")
+                    .content("[내부 지침] 도구 실행 중 사용자가 새 메시지를 보낼 수 있습니다. " +
+                            "새 메시지가 컨텍스트에 나타나면 먼저 간단히 대응한 후 기존 작업을 이어가세요. " +
+                            "급한 질문이면 즉시 답변하고, 방향 변경이면 기존 작업을 중단하세요. " +
+                            "이 안내는 사용자에게 보이지 않으므로 응답에 언급하지 마세요.")
+                    .build());
+        }
 
         // 7. SamplingParams 구성
         SamplingParams params = new SamplingParams(
@@ -130,11 +194,37 @@ public class ChatOrchestrator {
             return false;
         };
 
+        // incomingMessagePoll: LoopCallbacks에 있으면 그대로 사용, 없으면 onIntermediateText 기반 생성
+        Supplier<String> incomingMessagePoll;
+        if (loopCallbacks != null && loopCallbacks.incomingMessagePoll() != null) {
+            incomingMessagePoll = loopCallbacks.incomingMessagePoll();
+        } else if (onIntermediateText != null) {
+            incomingMessagePoll = () -> {
+                String msg = sessionManager.drainPending(channelId);
+                if (msg != null) {
+                    sessionManager.saveMessage(session.getId(), "user", msg, null, null, null);
+                }
+                return msg;
+            };
+        } else {
+            incomingMessagePoll = null;
+        }
+
         ToolCallingService.ToolCallingResult result;
         try {
-            result = toolCallingService.chatWithTools(
-                    context, params, visibleTools, filter, client, model, callingConfig,
-                    cancelCheck);
+            if (streamingListener != null || onIntermediateText != null) {
+                // LoopContext 기반 경로 (새 인터페이스)
+                LoopCallbacks effectiveCallbacks = new LoopCallbacks(onIntermediateText, incomingMessagePoll);
+                LoopContext loopContext = new LoopContext(callingConfig, cancelCheck, null, effectiveCallbacks);
+                result = toolCallingService.chatWithTools(
+                        context, params, visibleTools, filter, client, model,
+                        loopContext, streamingListener);
+            } else {
+                // 기존 8인자 오버로드
+                result = toolCallingService.chatWithTools(
+                        context, params, visibleTools, filter, client, model, callingConfig,
+                        cancelCheck);
+            }
         } catch (Exception e) {
             // LLM 호출 실패 시 미응답 user 메시지 삭제하여 DB 상태 복구
             sessionManager.deleteUnansweredUserMessages(session.getId());
@@ -195,6 +285,9 @@ public class ChatOrchestrator {
                 } catch (JsonProcessingException e) {
                     log.warn("[ChatOrchestrator] toolCalls 직렬화 실패: {}", e.getMessage());
                 }
+            } else if ("assistant".equals(msg.getRole()) || "user".equals(msg.getRole())) {
+                // 중간 텍스트 (assistant, toolCalls null) 또는 주입 사용자 메시지
+                builder.content(msg.getContentAsString());
             } else if ("tool".equals(msg.getRole())) {
                 builder.content(msg.getContentAsString())
                         .toolCallId(msg.getToolCallId());

@@ -32,6 +32,14 @@ public class LlmConfigProperties {
     private double toolCallingBudgetWarningRatio = 0.2;
     /** 토큰 추정 안전계수 (문자→토큰 변환 시 보정 배율) */
     private double toolCallingTokenEstimationMultiplier = 1.2;
+    /** S05: 같은 도구 연속 실패 허용 횟수. 초과 시 해당 도구 비활성화 */
+    private int toolCallingConsecutiveFailureLimit = 3;
+    /** S07: 도구 결과 최대 문자 수. 초과 시 절삭 */
+    private int toolResultMaxChars = 10000;
+    /** S16: 개별 도구 실행 타임아웃 (초) */
+    private int toolExecutionTimeoutSeconds = 120;
+    /** S08: LLM API 오류 재시도 횟수 */
+    private int apiRetryCount = 2;
 
     // ─── 토큰 갱신 설정 ───
 

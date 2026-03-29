@@ -46,9 +46,25 @@ public class MessengerGatewayRegistry {
         return null;
     }
 
+    public String sendTextAndGetId(ChannelRef channel, String message) {
+        var gw = gateways.get(channel.platform());
+        if (gw != null) return gw.sendTextAndGetId(channel, message);
+        return null;
+    }
+
     public void editMessage(ChannelRef channel, String messageId, String newText) {
         var gw = gateways.get(channel.platform());
         if (gw != null) gw.editMessage(channel, messageId, newText);
+    }
+
+    public void deleteMessage(ChannelRef channel, String messageId) {
+        var gw = gateways.get(channel.platform());
+        if (gw != null) gw.deleteMessage(channel, messageId);
+    }
+
+    public void sendWithEmbed(ChannelRef channel, String text, EmbedData embed) {
+        var gw = gateways.get(channel.platform());
+        if (gw != null) gw.sendWithEmbed(channel, text, embed);
     }
 
     // ─── 브로드캐스트 발신 ───

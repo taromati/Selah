@@ -22,6 +22,10 @@ public class ToolResult {
     @Builder.Default
     private final List<String> loadTools = null;
 
+    /** 도구 실행 실패 여부. true이면 LLM에 오류 결과로 전달. */
+    @Builder.Default
+    private final boolean failure = false;
+
     public static ToolResult text(String text) {
         return ToolResult.builder().text(text).build();
     }
@@ -32,6 +36,10 @@ public class ToolResult {
 
     public static ToolResult withLoadTools(String text, List<String> loadTools) {
         return ToolResult.builder().text(text).loadTools(loadTools).build();
+    }
+
+    public static ToolResult failure(String text) {
+        return ToolResult.builder().text(text).failure(true).build();
     }
 
     public boolean hasImage() {

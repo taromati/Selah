@@ -105,6 +105,18 @@ public class ChatMessage {
                 .build();
     }
 
+    /**
+     * content + tool_calls를 동시에 포함하는 assistant 메시지 (OpenAI API 규격 준수).
+     * 기존 assistantWithToolCalls는 content 없이 tool_calls만 담는다.
+     */
+    public static ChatMessage assistantWithContentAndToolCalls(String content, List<ChatCompletionResponse.ToolCall> toolCalls) {
+        return ChatMessage.builder()
+                .role("assistant")
+                .content(content)
+                .toolCalls(toolCalls)
+                .build();
+    }
+
     @Data
     @Builder
     @NoArgsConstructor

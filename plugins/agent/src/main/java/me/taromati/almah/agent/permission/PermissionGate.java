@@ -20,7 +20,7 @@ import java.util.Set;
 
 /**
  * 대화/루틴/제안/Cron/서브에이전트 공통 권한 게이트.
- * 판정 흐름: excludedTools → rejectedTools → ContextPolicyResolver → exec security → RejectionStrategy.
+ * 판정 흐름: excludedTools → rejectedTools → ContextPolicyResolver → RejectionStrategy.
  */
 @Slf4j
 @Service
@@ -62,7 +62,7 @@ public class PermissionGate {
 
     /**
      * 범용 ToolExecutionFilter 생성.
-     * 판정: excludedTools → rejectedTools → ContextPolicyResolver → exec security.
+     * 판정: excludedTools → rejectedTools → ContextPolicyResolver → RejectionStrategy.
      */
     private ToolExecutionFilter createFilter(ExecutionContext context,
                                               AgentTaskItemEntity taskItem,
@@ -88,14 +88,7 @@ public class PermissionGate {
             var verdict = contextPolicyResolver.resolve(context, toolName);
 
             if (verdict == ActionScopeResolver.Verdict.ALLOW) {
-                // 6단계: exec 보안 검증
-                if ("exec".equals(toolName)) {
-                    var execVerdict = ActionScopeResolver.checkExecSecurity(argumentsJson, config.getExec());
-                    if (execVerdict != ActionScopeResolver.Verdict.ALLOW) {
-                        auditLogService.log(taskId, sessionId, toolName, argumentsJson, null, "DENY");
-                        return String.format("'%s' 명령이 보안 정책에 의해 차단되었습니다.", toolName);
-                    }
-                }
+                // exec 보안 검증은 ExecToolHandler에서 수행 (S09: 단일 검증 지점)
                 auditLogService.log(taskId, sessionId, toolName, argumentsJson, null, "ALLOW");
                 return null;
             }

@@ -323,21 +323,6 @@ public class AgentApiController {
         return RootResponse.ok();
     }
 
-    // ─── MEMORY.md ───
-
-    @GetMapping("/memory-md")
-    public RootResponse<Map<String, String>> getMemoryMdFile() {
-        String content = persistentContextReader.readMemoryMd();
-        return RootResponse.ok(Map.of("content", content != null ? content : ""));
-    }
-
-    @PutMapping("/memory-md")
-    public RootResponse<Void> saveMemoryMdFile(@RequestBody Map<String, String> request) {
-        String content = request.getOrDefault("content", "");
-        persistentContextReader.writeMemoryMd(content);
-        return RootResponse.ok();
-    }
-
     // ─── USER.md ───
 
     @GetMapping("/user-md")

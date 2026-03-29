@@ -37,18 +37,6 @@
         </div>
       </el-collapse-item>
 
-      <el-collapse-item title="MEMORY.md" name="memory">
-        <el-input
-          v-model="memoryContent"
-          type="textarea"
-          :autosize="{ minRows: 6, maxRows: 30 }"
-          placeholder="MEMORY.md 내용이 없습니다."
-        />
-        <div class="section-footer">
-          <el-button type="primary" :loading="memorySaving" @click="saveMemory">저장</el-button>
-        </div>
-      </el-collapse-item>
-
       <el-collapse-item title="USER.md" name="user">
         <el-input
           v-model="userContent"
@@ -71,7 +59,7 @@ import api from '@/api/client'
 import type { ApiResponse } from './types'
 
 const loading = ref(false)
-const openSections = ref<string[]>(['persona', 'guide', 'tools', 'memory', 'user'])
+const openSections = ref<string[]>(['persona', 'guide', 'tools', 'user'])
 
 const personaContent = ref('')
 const personaSaving = ref(false)
@@ -82,26 +70,21 @@ const guideSaving = ref(false)
 const toolsContent = ref('')
 const toolsSaving = ref(false)
 
-const memoryContent = ref('')
-const memorySaving = ref(false)
-
 const userContent = ref('')
 const userSaving = ref(false)
 
 async function loadProfile(): Promise<void> {
   loading.value = true
   try {
-    const [personaRes, guideRes, toolsRes, memoryRes, userRes] = await Promise.all([
+    const [personaRes, guideRes, toolsRes, userRes] = await Promise.all([
       api.get<ApiResponse<{ content: string }>>('/agent/api/persona/file'),
       api.get<ApiResponse<{ content: string }>>('/agent/api/guide'),
       api.get<ApiResponse<{ content: string }>>('/agent/api/tools-md'),
-      api.get<ApiResponse<{ content: string }>>('/agent/api/memory-md'),
       api.get<ApiResponse<{ content: string }>>('/agent/api/user-md')
     ])
     personaContent.value = personaRes.data.data?.content ?? ''
     guideContent.value = guideRes.data.data?.content ?? ''
     toolsContent.value = toolsRes.data.data?.content ?? ''
-    memoryContent.value = memoryRes.data.data?.content ?? ''
     userContent.value = userRes.data.data?.content ?? ''
   } catch {
     ElMessage.error('프로필 로드 실패')
@@ -155,22 +138,6 @@ async function saveTools(): Promise<void> {
     ElMessage.error('TOOLS.md 저장에 실패했습니다.')
   } finally {
     toolsSaving.value = false
-  }
-}
-
-async function saveMemory(): Promise<void> {
-  memorySaving.value = true
-  try {
-    const { data } = await api.put<ApiResponse>('/agent/api/memory-md', { content: memoryContent.value })
-    if (data.code === 'OK') {
-      ElMessage.success('MEMORY.md 저장 완료')
-    } else {
-      ElMessage.error(data.message || 'MEMORY.md 저장 실패')
-    }
-  } catch {
-    ElMessage.error('MEMORY.md 저장에 실패했습니다.')
-  } finally {
-    memorySaving.value = false
   }
 }
 

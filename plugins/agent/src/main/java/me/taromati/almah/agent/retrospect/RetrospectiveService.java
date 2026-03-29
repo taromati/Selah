@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
@@ -53,28 +52,42 @@ public class RetrospectiveService {
     }
 
     /**
-     * 세션 회고: 아카이브된 세션의 대화를 분석하여 USER.md 갱신 + memory 모듈에 인사이트 ingest.
+     * 세션 회고: 아카이브된 세션의 대화를 분석하여 USER.md 갱신 + memory에 observations ingest.
      */
     public void retrospectSession(String sessionId) {
         if (!Boolean.TRUE.equals(config.getRetrospect().getEnabled())) return;
 
         List<AgentMessageEntity> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
 
-        // user/assistant만 필터 (tool_calls/tool 제외)
         List<AgentMessageEntity> conversationMessages = messages.stream()
                 .filter(m -> ("user".equals(m.getRole()) || "assistant".equals(m.getRole()))
                         && m.getToolCalls() == null && m.getContent() != null)
                 .toList();
 
-        if (conversationMessages.size() < config.getRetrospect().getMinMessagesForSession()) {
-            log.debug("[Retrospect] 세션 {} 메시지 부족 ({}개), 스킵",
-                    sessionId, conversationMessages.size());
+        runRetrospective(sessionId, conversationMessages);
+    }
+
+    /**
+     * 회고 핵심 로직: 대화를 분석하여 observations를 memory에 저장하고, 사용자 이해가 바뀌었으면 USER.md를 재작성한다.
+     *
+     * <p>LLM 응답 스키마:
+     * <pre>
+     * {
+     *   "observations": ["사실 형태 관찰"],
+     *   "userUnderstanding": "재작성된 서술형 프로필 또는 null",
+     *   "operationalInsights": ["운영 패턴"],
+     *   "skipReason": "학습할 것 없으면 이유, 있으면 null"
+     * }
+     * </pre>
+     */
+    public void runRetrospective(String sessionId, List<AgentMessageEntity> messages) {
+        if (messages.size() < config.getRetrospect().getMinMessagesForSession()) {
+            log.debug("[Retrospect] 메시지 부족 ({}개), 스킵", messages.size());
             return;
         }
 
-        // 대화 내용 구성
         StringBuilder conversation = new StringBuilder();
-        for (var msg : conversationMessages) {
+        for (var msg : messages) {
             conversation.append(msg.getRole()).append(": ")
                     .append(truncate(msg.getContent(), 500)).append("\n");
         }
@@ -82,39 +95,31 @@ public class RetrospectiveService {
         try {
             LlmClient client = clientResolver.resolve(config.getLlmProviderName());
 
-            // 기존 USER.md를 프롬프트에 포함 (섹션 인식용)
             String existingUserMd = persistentContextReader.readUserMd();
             String userMdContext = (existingUserMd != null && !existingUserMd.isBlank())
-                    ? "현재 USER.md:\n---\n" + existingUserMd + "---\n\n"
+                    ? "현재 USER.md:\n---\n" + existingUserMd + "\n---\n\n"
                     : "현재 USER.md: (비어있음)\n\n";
 
+            String memoryObservationsContext = fetchRecentObservations();
+
             String systemPrompt = """
-                    당신은 대화 분석 전문가입니다. 대화를 분석하여 사용자 프로필(USER.md)을 갱신하세요.
+                    당신은 대화 분석 전문가입니다. 대화를 분석하여 사용자에 대한 이해를 갱신하세요.
 
-                    %s\
+                    %s%s\
                     분석 후 JSON으로 응답하세요:
-                    1. sectionUpdates: 갱신할 섹션 배열. 각 항목은 header(마크다운 헤더)와 content(본문)
-                    2. operationalInsights: 효과적이었던 도구 사용 패턴, 개선점 (배열)
-                    3. skipReason: 학습할 것이 없으면 이유 문자열, 있으면 null
+                    1. observations: 이번 대화에서 발견한 사용자에 대한 사실 관찰 배열 ("~이다", "~한다" 형태)
+                    2. userUnderstanding: 사용자에 대한 이해가 바뀌었으면 USER.md 전체를 서술형으로 재작성. 변화 없으면 null
+                    3. operationalInsights: 효과적이었던 도구 사용 패턴, 개선점 (배열)
+                    4. skipReason: 학습할 것이 없으면 이유 문자열, 있으면 null
 
-                    섹션 갱신 규칙:
-                    - 기존 섹션의 내용과 새 인사이트를 병합하여 중복을 제거하세요
-                    - 유사한 항목은 하나로 통합하세요 (예: 같은 주제의 반복된 관찰)
-                    - 변경이 필요한 섹션만 포함하세요 (변경 없는 섹션은 제외)
-                    - 각 섹션의 전체 content를 반환하세요 (추가분만이 아닌 병합된 전체)
-                    - header는 마크다운 헤더 형식 유지 (예: "## 자동 학습", "### 취미/일상")
-                    - content에 header를 포함하지 마세요 (코드가 자동 추가)
-                    - 새 카테고리가 필요하면 적절한 header 레벨(##/###)로 추가하세요
-                    - 일상 대화, 단순 질문/답변은 skipReason 기재
-
-                    operationalInsights 작성 규칙:
-                    - 각 인사이트를 한 줄로 작성
-                    - 행동 규칙 형태로 (~해라/~하지 마라)
-                    - 이유는 대시(—) 뒤에 간결하게
-                    - 장황한 분석적 서술 금지. 짧고 실행 가능한 규칙만.
+                    userUnderstanding 작성 규칙:
+                    - 기존 USER.md의 정보 중 명시적으로 부정되지 않은 내용은 유지
+                    - 최근 관찰을 반영하고, 오래된 관심사는 비중을 자연 축소
+                    - bullet 나열이 아닌 서술형으로 작성
+                    - 변화가 없으면 반드시 null을 반환 (불필요한 재작성 금지)
 
                     JSON만 출력, 마크다운 코드블록 없이:
-                    {"sectionUpdates":[{"header":"## 예시","content":"- 항목"}],"operationalInsights":[],"skipReason":null}""".formatted(userMdContext);
+                    {"observations":[],"userUnderstanding":null,"operationalInsights":[],"skipReason":null}""".formatted(userMdContext, memoryObservationsContext);
 
             List<ChatMessage> context = List.of(
                     ChatMessage.builder().role("system").content(systemPrompt).build(),
@@ -128,35 +133,87 @@ public class RetrospectiveService {
             JsonNode json = parseJson(content);
             if (json == null) return;
 
-            String skipReason = json.has("skipReason") && !json.get("skipReason").isNull()
-                    ? json.get("skipReason").asText() : null;
-            if (skipReason != null) {
-                log.debug("[Retrospect] 세션 {} 스킵: {}", sessionId, skipReason);
-                return;
-            }
+            // observations ingest
+            List<String> observations = extractStringArray(json, "observations");
+            ingestObservations(observations, sessionId);
 
-            List<SectionUpdate> sectionUpdates = extractSectionUpdates(json);
+            // operationalInsights ingest
             List<String> operationalInsights = extractStringArray(json, "operationalInsights");
+            ingestOperationalInsights(operationalInsights, sessionId);
 
-            if (sectionUpdates.isEmpty() && operationalInsights.isEmpty()) return;
+            // userUnderstanding → writeUserMd (전체 교체)
+            String userUnderstanding = json.has("userUnderstanding") && !json.get("userUnderstanding").isNull()
+                    ? json.get("userUnderstanding").asText() : null;
 
-            if (!sectionUpdates.isEmpty()) {
+            if (userUnderstanding != null) {
                 mdWriteLock.lock();
                 try {
-                    updateUserMd(sectionUpdates);
+                    persistentContextReader.writeUserMd(userUnderstanding);
                 } finally {
                     mdWriteLock.unlock();
                 }
             }
-            if (!operationalInsights.isEmpty()) {
-                ingestToMemory(operationalInsights, sessionId);
-            }
 
-            log.info("[Retrospect] 세션 {} 회고 완료: sections={}, operational={}",
-                    sessionId, sectionUpdates.size(), operationalInsights.size());
+            String skipReason = json.has("skipReason") && !json.get("skipReason").isNull()
+                    ? json.get("skipReason").asText() : null;
+
+            log.info("[Retrospect] 세션 {} 회고 완료: observations={}, understanding={}, operational={}, skip={}",
+                    sessionId, observations.size(), userUnderstanding != null, operationalInsights.size(), skipReason);
 
         } catch (Exception e) {
             log.warn("[Retrospect] 세션 {} 회고 실패: {}", sessionId, e.getMessage());
+        }
+    }
+
+    /**
+     * 마이그레이션: 기존 bullet 형식 USER.md를 서술형으로 변환하고, 각 bullet을 memory에 이관한다.
+     */
+    public void migrateUserMd() {
+        String existingUserMd = persistentContextReader.readUserMd();
+        if (existingUserMd == null || existingUserMd.isBlank()) return;
+
+        // bullet 파싱: "- "로 시작하는 줄만 관찰로 추출, 헤더(##/###) 제외
+        List<String> bulletObservations = new ArrayList<>();
+        for (String line : existingUserMd.split("\n")) {
+            String trimmed = line.strip();
+            if (trimmed.startsWith("- ")) {
+                bulletObservations.add(trimmed.substring(2));
+            }
+        }
+
+        // 각 관찰을 memory에 이관
+        MemoryService memoryService = memoryServiceProvider.getIfAvailable();
+        if (memoryService != null && !bulletObservations.isEmpty()) {
+            for (String obs : bulletObservations) {
+                Map<String, String> metadata = new HashMap<>();
+                metadata.put("source", "migration");
+                metadata.put("type", "user_observation");
+                memoryService.ingest(obs, metadata);
+            }
+        }
+
+        // LLM으로 서술형 변환
+        try {
+            LlmClient client = clientResolver.resolve(config.getLlmProviderName());
+
+            String systemPrompt = """
+                    아래 사용자 프로필(bullet 형식)을 자연스러운 서술형으로 변환하세요.
+                    기존 정보를 모두 포함하되, 핵심 정보를 중심으로 자연스럽게 서술하세요.
+                    서술형 텍스트만 반환하세요 (마크다운 코드블록 없이).""";
+
+            List<ChatMessage> context = List.of(
+                    ChatMessage.builder().role("system").content(systemPrompt).build(),
+                    ChatMessage.builder().role("user").content(existingUserMd).build()
+            );
+
+            var response = client.chatCompletion(context, SamplingParams.withTemperature(0.3));
+            String narrative = response.getContent();
+            if (narrative != null && !narrative.isBlank()) {
+                persistentContextReader.writeUserMd(narrative);
+                log.info("[Retrospect] USER.md 마이그레이션 완료: {}줄 bullet → 서술형", bulletObservations.size());
+            }
+        } catch (Exception e) {
+            log.warn("[Retrospect] USER.md 마이그레이션 실패: {}", e.getMessage());
         }
     }
 
@@ -216,7 +273,7 @@ public class RetrospectiveService {
             List<String> insights = extractStringArray(json, "insights");
             if (insights.isEmpty()) return;
 
-            ingestToMemory(insights, null);
+            ingestOperationalInsights(insights, null);
 
             log.info("[Retrospect] Task '{}' 회고 완료: insights={}", taskTitle, insights.size());
 
@@ -225,142 +282,55 @@ public class RetrospectiveService {
         }
     }
 
-    // ── USER.md 섹션 관리 ───────────────────────
+    // ── Memory ingest ───────────────────────
 
-    private record SectionUpdate(String header, String content) {}
-
-    /**
-     * USER.md를 섹션 단위로 파싱.
-     * 반환: (header → content) 순서 보존 맵. 헤더 없는 프리앰블은 빈 문자열 키.
-     */
-    private LinkedHashMap<String, String> parseMdSections(String markdown) {
-        LinkedHashMap<String, String> sections = new LinkedHashMap<>();
-        if (markdown == null || markdown.isBlank()) return sections;
-
-        String[] lines = markdown.split("\n", -1);
-        String currentHeader = "";
-        StringBuilder content = new StringBuilder();
-
-        for (String line : lines) {
-            if (line.startsWith("## ") || line.startsWith("### ")) {
-                sections.put(currentHeader, content.toString());
-                currentHeader = line;
-                content = new StringBuilder();
-            } else {
-                content.append(line).append("\n");
-            }
-        }
-        sections.put(currentHeader, content.toString());
-
-        return sections;
-    }
-
-    /**
-     * USER.md에 섹션 업데이트 적용.
-     * 기존 섹션: content 교체. 새 섹션: ###은 마지막 ### 뒤, ##은 파일 끝.
-     */
-    private void updateUserMd(List<SectionUpdate> updates) {
-        String current = persistentContextReader.readUserMd();
-        LinkedHashMap<String, String> sections = parseMdSections(current != null ? current : "");
-
-        for (SectionUpdate update : updates) {
-            String header = update.header().strip();
-            String newContent = update.content().strip() + "\n";
-
-            if (sections.containsKey(header)) {
-                sections.put(header, newContent);
-            } else if (header.startsWith("### ")) {
-                insertSubSection(sections, header, newContent);
-            } else {
-                sections.put(header, newContent);
-            }
-        }
-
-        persistentContextReader.writeUserMd(reassembleMd(sections));
-        log.debug("[Retrospect] USER.md 갱신: {}개 섹션", sections.size());
-    }
-
-    /**
-     * 새 ### 섹션을 마지막 ### 뒤에 삽입.
-     */
-    private void insertSubSection(LinkedHashMap<String, String> sections, String header, String content) {
-        List<String> keys = new ArrayList<>(sections.keySet());
-        int insertAfter = -1;
-        for (int i = 0; i < keys.size(); i++) {
-            if (keys.get(i).startsWith("### ")) {
-                insertAfter = i;
-            }
-        }
-
-        LinkedHashMap<String, String> result = new LinkedHashMap<>();
-        if (insertAfter < 0) {
-            // 기존 ### 없음 — 파일 끝에 추가
-            result.putAll(sections);
-            result.put(header, content);
-        } else {
-            for (int i = 0; i < keys.size(); i++) {
-                result.put(keys.get(i), sections.get(keys.get(i)));
-                if (i == insertAfter) {
-                    result.put(header, content);
-                }
-            }
-        }
-
-        sections.clear();
-        sections.putAll(result);
-    }
-
-    /**
-     * 섹션 맵을 마크다운 문자열로 재조합.
-     */
-    private String reassembleMd(LinkedHashMap<String, String> sections) {
-        StringBuilder sb = new StringBuilder();
-        for (Map.Entry<String, String> entry : sections.entrySet()) {
-            String header = entry.getKey();
-            String content = entry.getValue().stripTrailing();
-
-            if (!header.isEmpty()) {
-                if (sb.length() > 0) sb.append("\n");
-                sb.append(header).append("\n");
-            }
-            if (!content.isEmpty()) {
-                sb.append(content).append("\n");
-            }
-        }
-        return sb.toString();
-    }
-
-    private List<SectionUpdate> extractSectionUpdates(JsonNode json) {
-        List<SectionUpdate> updates = new ArrayList<>();
-        if (json.has("sectionUpdates") && json.get("sectionUpdates").isArray()) {
-            for (JsonNode item : json.get("sectionUpdates")) {
-                String header = item.has("header") ? item.get("header").asText() : null;
-                String content = item.has("content") ? item.get("content").asText() : null;
-                if (header != null && !header.isBlank() && content != null) {
-                    updates.add(new SectionUpdate(header, content));
-                }
-            }
-        }
-        return updates;
-    }
-
-    // ── Memory 모듈 ingest ───────────────────────
-
-    private void ingestToMemory(List<String> insights, String sessionId) {
+    private void ingestObservations(List<String> observations, String sessionId) {
+        if (observations.isEmpty()) return;
         MemoryService memoryService = memoryServiceProvider.getIfAvailable();
         if (memoryService == null) {
-            log.warn("[Retrospect] MemoryService 비활성 — 인사이트 {}건 저장 불가", insights.size());
+            log.warn("[Retrospect] MemoryService 비활성 — observations {}건 저장 불가", observations.size());
             return;
         }
+        for (String obs : observations) {
+            Map<String, String> metadata = new HashMap<>();
+            metadata.put("source", "retrospect");
+            metadata.put("type", "user_observation");
+            if (sessionId != null) metadata.put("sessionId", sessionId);
+            memoryService.ingest(obs, metadata);
+        }
+    }
 
+    private void ingestOperationalInsights(List<String> insights, String sessionId) {
+        if (insights.isEmpty()) return;
+        MemoryService memoryService = memoryServiceProvider.getIfAvailable();
+        if (memoryService == null) {
+            log.warn("[Retrospect] MemoryService 비활성 — insights {}건 저장 불가", insights.size());
+            return;
+        }
         for (String insight : insights) {
             Map<String, String> metadata = new HashMap<>();
             metadata.put("source", "retrospect");
             metadata.put("type", "operational_insight");
-            if (sessionId != null) {
-                metadata.put("sessionId", sessionId);
-            }
+            if (sessionId != null) metadata.put("sessionId", sessionId);
             memoryService.ingest(insight, metadata);
+        }
+    }
+
+    private String fetchRecentObservations() {
+        MemoryService memoryService = memoryServiceProvider.getIfAvailable();
+        if (memoryService == null) return "";
+        try {
+            var results = memoryService.search("사용자 관찰 최근 선호 패턴");
+            if (results.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder("최근 사용자 관찰:\n");
+            int limit = Math.min(results.size(), 20);
+            for (int i = 0; i < limit; i++) {
+                sb.append("- ").append(results.get(i).content()).append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("[Retrospect] Memory 검색 실패: {}", e.getMessage());
+            return "";
         }
     }
 
@@ -368,7 +338,6 @@ public class RetrospectiveService {
 
     private JsonNode parseJson(String content) {
         try {
-            // 마크다운 코드블록 제거
             String cleaned = content.strip();
             if (cleaned.startsWith("```")) {
                 int start = cleaned.indexOf('\n') + 1;

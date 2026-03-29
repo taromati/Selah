@@ -39,6 +39,7 @@ public final class SseStreamParser {
                                                        Consumer<String> tokenCallback,
                                                        ObjectMapper objectMapper) throws IOException {
         StringBuilder contentAccumulator = new StringBuilder();
+        ToolCallAccumulator toolCallAccumulator = new ToolCallAccumulator();
         String model = null;
         String id = null;
         String finishReason = null;
@@ -67,17 +68,25 @@ public final class SseStreamParser {
                         model = node.get("model").asText();
                     }
 
-                    // delta.content 추출
+                    // delta.content / delta.tool_calls 추출
                     JsonNode choices = node.get("choices");
                     if (choices != null && choices.isArray() && !choices.isEmpty()) {
                         JsonNode firstChoice = choices.get(0);
 
                         JsonNode delta = firstChoice.get("delta");
-                        if (delta != null && delta.has("content")) {
-                            String content = delta.get("content").asText();
-                            if (content != null && !content.isEmpty()) {
-                                contentAccumulator.append(content);
-                                tokenCallback.accept(content);
+                        if (delta != null) {
+                            // content delta
+                            if (delta.has("content")) {
+                                String content = delta.get("content").asText();
+                                if (content != null && !content.isEmpty()) {
+                                    contentAccumulator.append(content);
+                                    tokenCallback.accept(content);
+                                }
+                            }
+
+                            // tool_calls delta
+                            if (delta.has("tool_calls")) {
+                                toolCallAccumulator.accumulate(delta.get("tool_calls"));
                             }
                         }
 
@@ -103,9 +112,13 @@ public final class SseStreamParser {
             }
         }
 
+        // tool_calls 조립
+        List<ChatCompletionResponse.ToolCall> toolCalls = toolCallAccumulator.build();
+
         // ChatCompletionResponse 조립
         var message = new ChatCompletionResponse.ResponseMessage(
-                "assistant", contentAccumulator.toString(), null);
+                "assistant", contentAccumulator.toString(),
+                toolCalls.isEmpty() ? null : toolCalls);
         var choice = new ChatCompletionResponse.Choice(0, message, finishReason);
         return new ChatCompletionResponse(id, "chat.completion", null, model, List.of(choice), usage);
     }

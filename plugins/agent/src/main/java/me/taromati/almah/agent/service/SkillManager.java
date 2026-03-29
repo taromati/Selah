@@ -121,6 +121,47 @@ public class SkillManager {
     }
 
     /**
+     * 기존 스킬 수정 (SKILL.md 덮어쓰기 + 캐시 갱신).
+     * name 필드와 디렉토리 이름이 다를 경우도 처리.
+     */
+    public void update(String name, String content) throws IOException {
+        Path skillMd = resolveActualSkillMd(name);
+        if (skillMd == null || !Files.isRegularFile(skillMd)) {
+            throw new IOException("스킬 파일을 찾을 수 없습니다: " + name);
+        }
+        Files.writeString(skillMd, content);
+        reloadSkill(name);
+        log.info("[SkillManager] Updated skill: {}", name);
+    }
+
+    /**
+     * name 필드 기준으로 실제 SKILL.md 경로를 찾는다.
+     * 디렉토리 이름이 다를 경우 (예: mcp_wrap vs mcp-wrap) 전체 스캔.
+     */
+    Path resolveActualSkillMd(String name) {
+        Path direct = reader.resolveSkillPath(name);
+        if (Files.isRegularFile(direct)) return direct;
+
+        Path skillsDir = reader.resolveSkillsDir();
+        if (!Files.isDirectory(skillsDir)) return null;
+        try (var dirs = Files.newDirectoryStream(skillsDir)) {
+            for (Path dir : dirs) {
+                if (!Files.isDirectory(dir)) continue;
+                Path md = dir.resolve("SKILL.md");
+                if (Files.isRegularFile(md)) {
+                    SkillFile parsed = reader.parseSkillFile(md);
+                    if (parsed != null && name.equals(parsed.name())) {
+                        return md;
+                    }
+                }
+            }
+        } catch (IOException e) {
+            log.warn("[SkillManager] Failed to scan skills dir for '{}': {}", name, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
      * 스킬 삭제 (디렉토리 전체 삭제).
      */
     public void remove(String name) throws IOException {

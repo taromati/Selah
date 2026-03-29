@@ -76,6 +76,27 @@ public class AgentConfigProperties {
     private RetrospectConfig retrospect = new RetrospectConfig();
     private TaskConfig task = new TaskConfig();
     private SkillConfig skill = new SkillConfig();
+    private int streamingDebounceMs = 200;
+    private int streamingSplitThreshold = 2000;
+
+    /** 한 턴의 도구 루프 최대 시간 (분). 기본 5분. 0 이하 → 5. */
+    private int maxDurationMinutes = 5;
+    /** 이어하기 최대 횟수. 기본 3회. 0 이하 → 3. */
+    private int maxContinuations = 3;
+    /** 이어하기 승인 대기 시간 (분). 기본 2분. 0 이하 → 2. */
+    private int continuationTimeoutMinutes = 2;
+
+    public int getMaxDurationMinutes() {
+        return maxDurationMinutes > 0 ? maxDurationMinutes : 5;
+    }
+
+    public int getMaxContinuations() {
+        return maxContinuations > 0 ? maxContinuations : 3;
+    }
+
+    public int getContinuationTimeoutMinutes() {
+        return continuationTimeoutMinutes > 0 ? continuationTimeoutMinutes : 2;
+    }
 
     @Getter
     @Setter
@@ -98,8 +119,8 @@ public class AgentConfigProperties {
         private Integer taskIdleTimeoutMinutes = 60;
         /** 세션 유휴 타임아웃 (분). 기본 240분 (4시간). 0이면 비활성화. */
         private Integer sessionIdleTimeoutMinutes = 240;
-        /** 채널당 최대 비활성 세션 수. 초과 시 가장 오래된 것부터 삭제. */
-        private Integer maxInactiveSessions = 5;
+        /** 채널당 최대 비활성 세션 수. 0 이하면 무제한 유지. */
+        private Integer maxInactiveSessions = 0;
     }
 
     /**

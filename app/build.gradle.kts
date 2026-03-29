@@ -141,6 +141,7 @@ val packageRuntime = tasks.register<Exec>("packageRuntime") {
 dependencies {
     implementation(project(":core"))
     implementation(project(":llm"))
+    implementation(project(":memory"))
     implementation(project(":plugins:agent"))
 
     implementation("org.springframework.boot:spring-boot-starter-web")

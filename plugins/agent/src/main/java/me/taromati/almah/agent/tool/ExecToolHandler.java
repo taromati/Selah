@@ -75,7 +75,7 @@ public class ExecToolHandler {
     }
 
     @PostConstruct
-    void register() {
+    public void register() {
         toolRegistry.register("exec", DEFINITION, this::execute);
     }
 

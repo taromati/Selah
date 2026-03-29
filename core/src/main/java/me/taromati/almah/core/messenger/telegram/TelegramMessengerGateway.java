@@ -120,6 +120,16 @@ public class TelegramMessengerGateway implements MessengerGateway {
     }
 
     @Override
+    public String sendTextAndGetId(ChannelRef channel, String message) {
+        if (message == null || message.isEmpty()) return null;
+        SendResponse response = bot.execute(new SendMessage(channel.channelId(), message));
+        if (response.isOk() && response.message() != null) {
+            return String.valueOf(response.message().messageId());
+        }
+        return null;
+    }
+
+    @Override
     public void editMessage(ChannelRef channel, String messageId, String newText) {
         try {
             bot.execute(new EditMessageText(channel.channelId(), Integer.parseInt(messageId), newText)

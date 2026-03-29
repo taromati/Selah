@@ -1,5 +1,8 @@
 package me.taromati.almah.setup;
 
+import me.taromati.almah.agent.config.AgentConfigDefaults;
+import me.taromati.almah.memory.config.MemoryConfigDefaults;
+import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
@@ -39,7 +42,7 @@ public class ConfigGenerator {
     private String agentLlmProviderName = null;  // null = llmProvider 사용
     private String agentRoutineProvider = null;   // null = llmProvider 사용
     private String agentSuggestProvider = null;   // null = llmProvider 사용
-    private Map<String, String> agentToolsPolicies = defaultToolsPolicies();
+    private Map<String, String> agentToolsPolicies = agentDefaultToolsPolicies();
     private String agentToolsPolicyDefault = "ask";
     private boolean agentSuggestEnabled = false;
     private String agentDatasourceUrl = null;     // null = agentDataDir 기반 자동 생성
@@ -355,7 +358,7 @@ public class ConfigGenerator {
         this.agentLlmProviderName = null;
         this.agentRoutineProvider = null;
         this.agentSuggestProvider = null;
-        this.agentToolsPolicies = defaultToolsPolicies();
+        this.agentToolsPolicies = agentDefaultToolsPolicies();
         this.agentToolsPolicyDefault = "ask";
         this.agentSuggestEnabled = false;
         this.agentDatasourceUrl = null;
@@ -463,61 +466,76 @@ public class ConfigGenerator {
                 ? agentDatasourceUrl
                 : "jdbc:sqlite:" + agentDataDir + "agent.sqlite";
 
+        // ── Plugins: Agent ──
+        Map<String, Object> agentDefaults = AgentConfigDefaults.defaults();
+        agentDefaults.put("channel-name", agentChannelName);
+        agentDefaults.put("data-dir", agentDataDir);
+        agentDefaults.put("llm-provider-name", effectiveLlmProviderName);
+        agentDefaults.put("routine-provider", effectiveRoutineProvider);
+        agentDefaults.put("suggest-provider", effectiveSuggestProvider);
+
+        // tools: 사용자 입력 policy 병합
+        @SuppressWarnings("unchecked")
+        Map<String, Object> toolsMap = (Map<String, Object>) agentDefaults.get("tools");
+        if (!agentToolsPolicies.isEmpty()) {
+            toolsMap.put("policy", new LinkedHashMap<>(agentToolsPolicies));
+        }
+        toolsMap.put("policy-default", agentToolsPolicyDefault);
+
+        // suggest
+        @SuppressWarnings("unchecked")
+        Map<String, Object> suggestMap = (Map<String, Object>) agentDefaults.get("suggest");
+        suggestMap.put("enabled", agentSuggestEnabled);
+
+        // datasource
+        @SuppressWarnings("unchecked")
+        Map<String, Object> dsMap = (Map<String, Object>) agentDefaults.get("datasource");
+        dsMap.put("url", effectiveDatasourceUrl);
+
+        // web-search
+        @SuppressWarnings("unchecked")
+        Map<String, Object> wsMap = (Map<String, Object>) agentDefaults.get("web-search");
+        wsMap.put("provider", webSearchProvider);
+        if ("searxng".equals(webSearchProvider) && !searxngUrl.isEmpty()) {
+            wsMap.put("searxng-url", searxngUrl);
+        }
+
+        // ── Plugins: Memory ──
+        Map<String, Object> memoryDefaults = MemoryConfigDefaults.defaults();
+        memoryDefaults.put("llm-provider", effectiveLlmProviderName);
+
+        // ── 조립 ──
+        Map<String, Object> plugins = new LinkedHashMap<>();
+        plugins.put("notification-channel", agentChannelName);
+        plugins.put("agent", agentDefaults);
+        plugins.put("memory", memoryDefaults);
+
         sb.append("\n");
         sb.append("# ── Plugins ──\n");
-        sb.append("plugins:\n");
-        sb.append("  notification-channel: ").append(quote(agentChannelName)).append("\n");
-        sb.append("\n");
-        sb.append("  agent:\n");
-        sb.append("    enabled: ").append(agentEnabled).append("\n");
-        sb.append("    channel-name: ").append(quote(agentChannelName)).append("\n");
-        sb.append("    data-dir: ").append(quote(agentDataDir)).append("\n");
-        sb.append("    llm-provider-name: ").append(quote(effectiveLlmProviderName)).append("\n");
-        sb.append("    routine-provider: ").append(quote(effectiveRoutineProvider)).append("\n");
-        sb.append("    suggest-provider: ").append(quote(effectiveSuggestProvider)).append("\n");
-        sb.append("    tools:\n");
-        sb.append("      policy:\n");
-        for (var entry : agentToolsPolicies.entrySet()) {
-            sb.append("        ").append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
-        }
-        sb.append("      policy-default: ").append(agentToolsPolicyDefault).append("\n");
-        sb.append("    suggest:\n");
-        sb.append("      enabled: ").append(agentSuggestEnabled).append("\n");
-        sb.append("    datasource:\n");
-        sb.append("      url: ").append(quote(effectiveDatasourceUrl)).append("\n");
-        sb.append("      driver-class-name: ").append(quote(agentDatasourceDriverClassName)).append("\n");
+        sb.append(yamlDump("plugins", plugins));
 
-        if (!searxngUrl.isEmpty()) {
-            sb.append("    web-search:\n");
-            sb.append("      provider: ").append(quote(webSearchProvider)).append("\n");
-            if ("searxng".equals(webSearchProvider)) {
-                sb.append("      searxng-url: ").append(quote(searxngUrl)).append("\n");
-            }
-        }
-
-        sb.append("\n");
-        sb.append("  memory:\n");
-        sb.append("    enabled: true\n");
-        sb.append("    llm-provider: ").append(quote(effectiveLlmProviderName)).append("\n");
-        sb.append("    datasource:\n");
-        sb.append("      url: \"jdbc:sqlite:./memory-data/memory.sqlite\"\n");
-        sb.append("      driver-class-name: \"org.sqlite.JDBC\"\n");
-
+        // Web Auth
         sb.append("\n");
         sb.append("# ── Web Auth ──\n");
-        sb.append("web:\n");
-        sb.append("  auth:\n");
-        sb.append("    enabled: ").append(authEnabled).append("\n");
+        sb.append(yamlDump("web", Map.of("auth", Map.of("enabled", authEnabled))));
 
+        // Memory Engine
         sb.append("\n");
         sb.append("# ── Memory Engine ──\n");
-        sb.append("memory-engine:\n");
-        sb.append("  hnsw:\n");
-        sb.append("    enabled: true\n");
-        sb.append("  reranker:\n");
-        sb.append("    enabled: true\n");
+        sb.append(yamlDump("memory-engine", MemoryConfigDefaults.memoryEngineDefaults()));
 
         return sb.toString();
+    }
+
+    private String yamlDump(String rootKey, Object value) {
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        options.setIndent(2);
+        options.setPrettyFlow(true);
+        Yaml yaml = new Yaml(options);
+        Map<String, Object> wrapper = new LinkedHashMap<>();
+        wrapper.put(rootKey, value);
+        return yaml.dump(wrapper);
     }
 
     String quote(String value) {
@@ -532,25 +550,10 @@ public class ConfigGenerator {
         return value != null ? value : "";
     }
 
-    private static Map<String, String> defaultToolsPolicies() {
-        Map<String, String> policies = new LinkedHashMap<>();
-        policies.put("web_search", "allow");
-        policies.put("web_fetch", "allow");
-        policies.put("glob", "allow");
-        policies.put("grep", "allow");
-        policies.put("file_read", "allow");
-        policies.put("memory_search", "allow");
-        policies.put("memory_store", "allow");
-        policies.put("memory_get", "allow");
-        policies.put("memory_explore", "allow");
-        policies.put("memory_query", "allow");
-        policies.put("skill", "allow");
-        policies.put("cron", "allow");
-        policies.put("mcp_tools_load", "allow");
-        policies.put("exec", "ask");
-        policies.put("file_write", "ask");
-        policies.put("edit", "ask");
-        policies.put("spawn_subagent", "ask");
-        return policies;
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> agentDefaultToolsPolicies() {
+        Map<String, Object> tools = (Map<String, Object>) AgentConfigDefaults.defaults().get("tools");
+        Map<String, String> policy = (Map<String, String>) tools.get("policy");
+        return new LinkedHashMap<>(policy);
     }
 }
